@@ -18,7 +18,7 @@ class_name = "ProjectionRebuilder"
 
 [[migrations]]
 tag = "v1"
-new_classes = ["ProjectionRebuilder"]
+new_sqlite_classes = ["ProjectionRebuilder"]
 
 [triggers]
 crons = ["*/15 * * * *"]
