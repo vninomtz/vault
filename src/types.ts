@@ -14,7 +14,7 @@ export interface Env {
   DB: D1Database;
   STORAGE: R2Bucket;
   CACHE: KVNamespace;
-  WEBHOOKS: Queue;
+  WEBHOOKS?: Queue;
   REBUILDER: DurableObjectNamespace;
   CF_ACCESS_TEAM: string;
   ENCRYPTION_KEY: string;

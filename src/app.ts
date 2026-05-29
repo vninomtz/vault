@@ -34,57 +34,9 @@ app.use(
 // ─── Auth ─────────────────────────────────────────────────────────────────────
 
 app.use("*", async (c, next) => {
-  if (true) {
-    c.set("actor", {
-      id: SYSTEM_AUTHOR_ID,
-      kind: "system",
-      isSystem: true,
-      read: ["*:*"],
-      write: ["*:*"],
-    });
-    return next();
-  }
-
-  const auth = c.req.header("Authorization");
-  const cfJwt = c.req.header("CF-Access-Jwt-Assertion");
-
-  if (cfJwt) {
-    const identity = await validateAccessJwt(cfJwt, c.env.CF_ACCESS_TEAM);
-    if (!identity)
-      return c.json(
-        { error: { code: "unauthorized", message: "Invalid Cloudflare Access token" } },
-        401,
-      );
-    const db = createDb(c.env.DB);
-    const authorRow = await ensureHumanAuthor(db, identity.email);
-    c.set("actor", {
-      id: authorRow.id,
-      kind: "human",
-      email: identity.email,
-      read: ["*:*"],
-      write: ["*:*"],
-    });
-    return next();
-  }
-
-  if (auth?.startsWith("Bearer vlt_")) {
-    const token = auth.slice(7);
-    const hash = await sha256(token);
-    const db = createDb(c.env.DB);
-    const row = await db.select().from(tokens).where(eq(tokens.tokenHash, hash)).get();
-    if (!row || (row.expiresAt !== null && row.expiresAt < Date.now())) {
-      return c.json({ error: { code: "unauthorized", message: "Invalid or expired token" } }, 401);
-    }
-    c.set("actor", {
-      id: row.actorId,
-      kind: "agent",
-      read: JSON.parse(row.readScope) as string[],
-      write: JSON.parse(row.writeScope) as string[],
-    });
-    return next();
-  }
-
-  return c.json({ error: { code: "unauthorized", message: "Missing Authorization header" } }, 401);
+  // TODO: auth disabled — re-enable when ready
+  c.set("actor", { id: SYSTEM_AUTHOR_ID, kind: "system", isSystem: true, read: ["*:*"], write: ["*:*"] });
+  return next();
 });
 
 // ─── Rate limit ───────────────────────────────────────────────────────────────
@@ -711,32 +663,5 @@ function isScopeSubset(parent: string[], child: string[]): boolean {
   });
 }
 
-async function validateAccessJwt(jwt: string, team: string): Promise<{ email: string } | null> {
-  try {
-    await fetch(`https://${team}.cloudflareaccess.com/cdn-cgi/access/certs`);
-    const [, payloadB64] = jwt.split(".");
-    const payload = JSON.parse(atob(payloadB64)) as { email?: string; exp?: number };
-    if (!payload.email) return null;
-    if (payload.exp && payload.exp * 1000 < Date.now()) return null;
-    return { email: payload.email };
-  } catch {
-    return null;
-  }
-}
-
-async function ensureHumanAuthor(
-  db: ReturnType<typeof createDb>,
-  email: string,
-): Promise<{ id: string }> {
-  const existing = await db
-    .select({ id: authors.id })
-    .from(authors)
-    .where(eq(authors.name, email))
-    .get();
-  if (existing) return existing;
-  const id = ulid();
-  await db.insert(authors).values({ id, name: email, kind: "human", createdAt: Date.now() }).run();
-  return { id };
-}
 
 export default app;
