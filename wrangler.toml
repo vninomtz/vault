@@ -19,6 +19,10 @@ deleted_classes = ["ProjectionRebuilder"]
 [triggers]
 crons = ["*/15 * * * *"]
 
+[observability.logs]
+enabled = true
+invocation_logs = true
+
 [vars]
 VAULT_VERSION = "2026-05-26"
 
