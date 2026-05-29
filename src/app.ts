@@ -611,23 +611,6 @@ app.post("/files/:slug/conflicts/:conflictId/resolve", async (c) => {
   return c.json({ resolved: true, entry_id: result.id });
 });
 
-app.post("/files/:slug/projection/rebuild", async (c) => {
-  const slug = c.req.param("slug");
-  const db = createDb(c.env.DB);
-  const file = await db.select({ id: files.id }).from(files).where(eq(files.slug, slug)).get();
-  if (!file)
-    return c.json({ error: { code: "not_found", message: `File '${slug}' does not exist` } }, 404);
-
-  const id = c.env.REBUILDER.idFromName(file.id);
-  const stub = c.env.REBUILDER.get(id);
-  await stub.fetch("https://internal/rebuild", {
-    method: "POST",
-    body: JSON.stringify({ fileId: file.id }),
-  });
-
-  return c.json({ status: "rebuilding" });
-});
-
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
 function checkScope(scopes: string[], slug: string): boolean {

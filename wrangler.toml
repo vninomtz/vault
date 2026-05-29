@@ -12,14 +12,6 @@ migrations_dir = "drizzle"
 binding = "CACHE"
 id = "3093266e5c694331b39e4b9c0b1207e7"
 
-[[durable_objects.bindings]]
-name = "REBUILDER"
-class_name = "ProjectionRebuilder"
-
-[[migrations]]
-tag = "v1"
-new_sqlite_classes = ["ProjectionRebuilder"]
-
 [triggers]
 crons = ["*/15 * * * *"]
 
