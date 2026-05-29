@@ -149,22 +149,6 @@ export async function appendEntry(env: Env, params: AppendEntryParams): Promise<
     env.CACHE.delete(`projection_id:${file.id}`),
   ]);
 
-  // 8. Enqueue background work (queue is optional)
-  if (env.WEBHOOKS) {
-    await env.WEBHOOKS.sendBatch([
-      {
-        body: { type: "detect_conflicts", fileId: file.id, entryId },
-      },
-      {
-        body: {
-          type: "notify",
-          fileSlug: params.fileSlug,
-          fileType: params.type,
-          version: sequenceNumber,
-        },
-      },
-    ]);
-  }
 
   // 9. Maybe snapshot
   await maybeSnapshot(db, file.id, sequenceNumber, file.snapshotPolicy);

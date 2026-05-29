@@ -13,7 +13,6 @@ export type SourceType =
 export interface Env {
   DB: D1Database;
   CACHE: KVNamespace;
-  WEBHOOKS?: Queue;
   REBUILDER: DurableObjectNamespace;
   CF_ACCESS_TEAM: string;
   ENCRYPTION_KEY: string;
