@@ -1,4 +1,4 @@
-name = "vault"
+name = "vault-api"
 main = "src/index.ts"
 compatibility_date = "2026-05-26"
 
