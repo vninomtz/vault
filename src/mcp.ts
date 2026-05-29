@@ -1,26 +1,29 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { WebStandardStreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js";
 import { z } from "zod";
+import { eq, desc } from "drizzle-orm";
+import { createDb } from "./db/index";
+import { files } from "./db/schema";
+import { appendEntry } from "./domain/append-log";
+import { readProjection } from "./domain/projection-engine";
+import { ulid } from "./utils";
+import type { Env, EntryType } from "./types";
 
-const VAULT_URL = "https://vault-api.ninomtz-victor.workers.dev";
+const SYSTEM_SOURCE_ID = "01SYSTEM000000000000000000";
+const SYSTEM_AUTHOR_ID = "01SYSTEM000000000000000001";
 
-const HEADERS: HeadersInit = {
-  "Content-Type": "application/json",
-  "Vault-Version": "2026-05-26",
-};
-
-function createServer(): McpServer {
+function createServer(env: Env): McpServer {
   const server = new McpServer({ name: "vault", version: "1.0.0" });
+  const db = createDb(env.DB);
 
   server.tool(
     "read_file",
     "Lee el contenido vigente de un archivo de conocimiento en Vault",
     { slug: z.string().describe("Identificador del archivo (kebab-case)") },
     async ({ slug }) => {
-      const res = await fetch(`${VAULT_URL}/files/${slug}`, { headers: HEADERS });
-      if (!res.ok) return { content: [{ type: "text", text: `Error ${res.status}: '${slug}' no encontrado` }] };
-      const { file } = await res.json() as { file: { content: string; version: number } };
-      return { content: [{ type: "text", text: file.content }] };
+      const projection = await readProjection(env, slug);
+      if (!projection) return { content: [{ type: "text", text: `File '${slug}' no encontrado` }] };
+      return { content: [{ type: "text", text: projection.content }] };
     },
   );
 
@@ -33,13 +36,20 @@ function createServer(): McpServer {
       type: z.enum(["note", "rule", "skill", "policy", "context", "agent"]),
     },
     async ({ slug, content, type }) => {
-      const res = await fetch(`${VAULT_URL}/files/${slug}`, {
-        method: "PUT",
-        headers: HEADERS,
-        body: JSON.stringify({ content, type }),
+      const existing = await db.select({ id: files.id }).from(files).where(eq(files.slug, slug)).get();
+      const result = await appendEntry(env, {
+        fileSlug: slug,
+        content,
+        contentRef: null,
+        type: type as EntryType,
+        intent: existing ? "addition" : "genesis",
+        authorId: SYSTEM_AUTHOR_ID,
+        sourceId: SYSTEM_SOURCE_ID,
+        confidence: "medium",
+        references: [],
+        idempotencyKey: ulid(),
       });
-      const { file } = await res.json() as { file: { slug: string; version: number } };
-      return { content: [{ type: "text", text: `Guardado como '${file.slug}' (v${file.version})` }] };
+      return { content: [{ type: "text", text: `Guardado como '${slug}' (v${result.sequenceNumber})` }] };
     },
   );
 
@@ -51,15 +61,23 @@ function createServer(): McpServer {
       q: z.string().optional().describe("Búsqueda full-text"),
       limit: z.number().optional(),
     },
-    async ({ type, q, limit }) => {
-      const params = new URLSearchParams();
-      if (type) params.set("type", type);
-      if (q) params.set("q", q);
-      if (limit) params.set("limit", String(limit));
-      const res = await fetch(`${VAULT_URL}/files?${params}`, { headers: HEADERS });
-      const { files } = await res.json() as { files: Array<{ slug: string; type: string; content: string; version: number }> };
-      if (!files.length) return { content: [{ type: "text", text: "No se encontraron archivos." }] };
-      const text = files.map(f => `## ${f.slug} (${f.type}, v${f.version})\n${f.content}`).join("\n\n---\n\n");
+    async ({ type, q, limit = 20 }) => {
+      let query = db.select().from(files).orderBy(desc(files.updatedAt)).limit(limit).$dynamic();
+      if (type) query = query.where(eq(files.type, type as EntryType));
+      const rows = await query.all();
+
+      const results = await Promise.all(
+        rows.map(async (file) => {
+          const projection = await readProjection(env, file.slug);
+          const content = projection?.content ?? "";
+          if (q && !content.toLowerCase().includes(q.toLowerCase())) return null;
+          return { slug: file.slug, type: file.type, content, version: file.currentVersion };
+        }),
+      );
+
+      const filtered = results.filter(Boolean) as Array<{ slug: string; type: string; content: string; version: number }>;
+      if (!filtered.length) return { content: [{ type: "text", text: "No se encontraron archivos." }] };
+      const text = filtered.map(f => `## ${f.slug} (${f.type}, v${f.version})\n${f.content}`).join("\n\n---\n\n");
       return { content: [{ type: "text", text }] };
     },
   );
@@ -69,11 +87,11 @@ function createServer(): McpServer {
     "Lista todos los archivos de Vault",
     { type: z.enum(["note", "rule", "skill", "policy", "context", "agent"]).optional() },
     async ({ type }) => {
-      const params = type ? `?type=${type}` : "";
-      const res = await fetch(`${VAULT_URL}/files${params}`, { headers: HEADERS });
-      const { files } = await res.json() as { files: Array<{ slug: string; type: string; version: number }> };
-      if (!files.length) return { content: [{ type: "text", text: "Vault vacío." }] };
-      return { content: [{ type: "text", text: files.map(f => `- ${f.slug} (${f.type}, v${f.version})`).join("\n") }] };
+      let query = db.select().from(files).orderBy(desc(files.updatedAt)).$dynamic();
+      if (type) query = query.where(eq(files.type, type as EntryType));
+      const rows = await query.all();
+      if (!rows.length) return { content: [{ type: "text", text: "Vault vacío." }] };
+      return { content: [{ type: "text", text: rows.map(f => `- ${f.slug} (${f.type}, v${f.currentVersion})`).join("\n") }] };
     },
   );
 
@@ -88,23 +106,33 @@ function createServer(): McpServer {
       })),
     },
     async ({ operations }) => {
-      const res = await fetch(`${VAULT_URL}/batch`, {
-        method: "POST",
-        headers: HEADERS,
-        body: JSON.stringify({ operations: operations.map(op => ({ method: "PUT", ...op })) }),
-      });
-      const { results } = await res.json() as { results: Array<{ slug: string; status: string; version?: number }> };
-      const text = results.map(r => `${r.status === "ok" ? "✓" : "✗"} ${r.slug}${r.version ? ` (v${r.version})` : ""}`).join("\n");
-      return { content: [{ type: "text", text }] };
+      const lines: string[] = [];
+      for (const op of operations) {
+        const existing = await db.select({ id: files.id }).from(files).where(eq(files.slug, op.slug)).get();
+        const result = await appendEntry(env, {
+          fileSlug: op.slug,
+          content: op.content,
+          contentRef: null,
+          type: op.type as EntryType,
+          intent: existing ? "addition" : "genesis",
+          authorId: SYSTEM_AUTHOR_ID,
+          sourceId: SYSTEM_SOURCE_ID,
+          confidence: "medium",
+          references: [],
+          idempotencyKey: ulid(),
+        });
+        lines.push(`✓ ${op.slug} (v${result.sequenceNumber})`);
+      }
+      return { content: [{ type: "text", text: lines.join("\n") }] };
     },
   );
 
   return server;
 }
 
-export async function handleMcp(request: Request): Promise<Response> {
+export async function handleMcp(request: Request, env: Env): Promise<Response> {
   const transport = new WebStandardStreamableHTTPServerTransport({ sessionIdGenerator: undefined });
-  const server = createServer();
+  const server = createServer(env);
   await server.connect(transport);
   return transport.handleRequest(request);
 }

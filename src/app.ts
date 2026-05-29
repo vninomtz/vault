@@ -650,6 +650,6 @@ function isScopeSubset(parent: string[], child: string[]): boolean {
 
 // ─── MCP ─────────────────────────────────────────────────────────────────────
 
-app.all("/mcp", (c) => handleMcp(c.req.raw));
+app.all("/mcp", (c) => handleMcp(c.req.raw, c.env));
 
 export default app;
