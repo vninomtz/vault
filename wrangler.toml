@@ -8,10 +8,6 @@ database_name = "vault"
 database_id = "fd908dfe-2770-4e57-aba3-e7a867babd25"
 migrations_dir = "drizzle"
 
-[[r2_buckets]]
-binding = "STORAGE"
-bucket_name = "vault-storage"
-
 [[kv_namespaces]]
 binding = "CACHE"
 id = "3093266e5c694331b39e4b9c0b1207e7"
