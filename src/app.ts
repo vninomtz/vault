@@ -1,5 +1,6 @@
 import { Hono } from "hono";
 import { cors } from "hono/cors";
+import { handleMcp } from "./mcp";
 import { eq, desc, asc, lt } from "drizzle-orm";
 import { createDb } from "./db/index";
 import { files, entries, tokens, sources, subscriptions, conflicts, authors } from "./db/schema";
@@ -646,5 +647,9 @@ function isScopeSubset(parent: string[], child: string[]): boolean {
   });
 }
 
+
+// ─── MCP ─────────────────────────────────────────────────────────────────────
+
+app.all("/mcp", (c) => handleMcp(c.req.raw));
 
 export default app;
