@@ -1,0 +1,19 @@
+meta {
+  name: Delete Subscription
+  type: http
+  seq: 2
+}
+
+delete {
+  url: {{baseUrl}}/subscriptions/{{subscriptionId}}
+  body: none
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{token}}
+}
+
+headers {
+  Vault-Version: 2026-05-26
+}

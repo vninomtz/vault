@@ -1,0 +1,32 @@
+meta {
+  name: Import Source
+  type: http
+  seq: 5
+}
+
+post {
+  url: {{baseUrl}}/sources/{{sourceId}}/import
+  body: json
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{token}}
+}
+
+headers {
+  Vault-Version: 2026-05-26
+}
+
+body:json {
+  {
+    "dry_run": false,
+    "infer_type": true
+  }
+}
+
+script:post-response {
+  if (res.status === 202) {
+    bru.setVar("importId", res.body.import_id);
+  }
+}

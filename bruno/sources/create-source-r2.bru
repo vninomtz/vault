@@ -1,0 +1,37 @@
+meta {
+  name: Create Source (R2/S3)
+  type: http
+  seq: 3
+}
+
+post {
+  url: {{baseUrl}}/sources
+  body: json
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{token}}
+}
+
+headers {
+  Vault-Version: 2026-05-26
+}
+
+body:json {
+  {
+    "name": "docs-bucket",
+    "type": "r2",
+    "confidence": "medium",
+    "config": {
+      "bucket": "company-docs",
+      "prefix": "engineering/"
+    }
+  }
+}
+
+script:post-response {
+  if (res.status === 201) {
+    bru.setVar("sourceId", res.body.id);
+  }
+}

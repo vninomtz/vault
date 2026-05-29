@@ -1,0 +1,39 @@
+meta {
+  name: Create Source (GitHub)
+  type: http
+  seq: 1
+}
+
+post {
+  url: {{baseUrl}}/sources
+  body: json
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{token}}
+}
+
+headers {
+  Vault-Version: 2026-05-26
+}
+
+body:json {
+  {
+    "name": "notes-repo",
+    "type": "github",
+    "confidence": "high",
+    "config": {
+      "owner": "tu-usuario",
+      "repo": "notes",
+      "branch": "main",
+      "webhook_secret": "super-secret"
+    }
+  }
+}
+
+script:post-response {
+  if (res.status === 201) {
+    bru.setVar("sourceId", res.body.id);
+  }
+}

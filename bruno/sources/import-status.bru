@@ -1,0 +1,19 @@
+meta {
+  name: Import Status
+  type: http
+  seq: 6
+}
+
+get {
+  url: {{baseUrl}}/sources/{{sourceId}}/import/{{importId}}
+  body: none
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{token}}
+}
+
+headers {
+  Vault-Version: 2026-05-26
+}

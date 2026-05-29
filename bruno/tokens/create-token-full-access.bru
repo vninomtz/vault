@@ -1,0 +1,33 @@
+meta {
+  name: Create Token (Full Access)
+  type: http
+  seq: 2
+}
+
+post {
+  url: {{baseUrl}}/tokens
+  body: json
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{token}}
+}
+
+headers {
+  Vault-Version: 2026-05-26
+}
+
+body:json {
+  {
+    "name": "ci-pipeline",
+    "read": ["*:*"],
+    "write": ["*:*"]
+  }
+}
+
+script:post-response {
+  if (res.status === 201) {
+    bru.setVar("tokenId", res.body.token.split("_")[1]);
+  }
+}

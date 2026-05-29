@@ -1,0 +1,19 @@
+meta {
+  name: File History
+  type: http
+  seq: 1
+}
+
+get {
+  url: {{baseUrl}}/files/{{slug}}/history
+  body: none
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{token}}
+}
+
+headers {
+  Vault-Version: 2026-05-26
+}

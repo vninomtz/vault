@@ -1,0 +1,31 @@
+meta {
+  name: Write File (Optimistic Concurrency)
+  type: http
+  seq: 2
+}
+
+put {
+  url: {{baseUrl}}/files/{{slug}}
+  body: json
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{token}}
+}
+
+headers {
+  Vault-Version: 2026-05-26
+}
+
+body:json {
+  {
+    "content": "# TypeScript Rules\n\n- No usar `any`.\n- Siempre tipar los retornos de funciones.\n- Usar `unknown` en lugar de `any` cuando sea necesario.",
+    "type": "rule",
+    "if_version": 1,
+    "idempotency_key": "01HX6K2M3N5P6Q7R8S9T0U1V2W",
+    "meta": {
+      "confidence": "high"
+    }
+  }
+}

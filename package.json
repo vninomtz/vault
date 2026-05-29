@@ -1,0 +1,41 @@
+{
+  "name": "vault",
+  "version": "1.0.0",
+  "description": "",
+  "keywords": [],
+  "homepage": "https://github.com/vninomtz/vault#readme",
+  "bugs": {
+    "url": "https://github.com/vninomtz/vault/issues"
+  },
+  "license": "ISC",
+  "author": "",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/vninomtz/vault.git"
+  },
+  "type": "module",
+  "main": "src/index.ts",
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy",
+    "typecheck": "tsc --noEmit",
+    "db:generate": "drizzle-kit generate",
+    "db:migrate:local": "wrangler d1 migrations apply vault --local",
+    "db:migrate:remote": "wrangler d1 migrations apply vault  --remote",
+    "db:studio": "drizzle-kit studio",
+    "lint": "oxlint src",
+    "fmt": "oxfmt src"
+  },
+  "dependencies": {
+    "drizzle-orm": "^0.45.2",
+    "hono": "^4.12.23"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^4.20260529.1",
+    "drizzle-kit": "^0.31.10",
+    "oxfmt": "^0.52.0",
+    "oxlint": "^1.67.0",
+    "typescript": "^6.0.3",
+    "wrangler": "^4.95.0"
+  }
+}

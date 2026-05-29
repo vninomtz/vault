@@ -1,0 +1,45 @@
+meta {
+  name: Batch Write
+  type: http
+  seq: 1
+}
+
+post {
+  url: {{baseUrl}}/batch
+  body: json
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{token}}
+}
+
+headers {
+  Vault-Version: 2026-05-26
+}
+
+body:json {
+  {
+    "atomic": false,
+    "operations": [
+      {
+        "method": "PUT",
+        "slug": "vault-spec-api",
+        "content": "# Vault API Spec\n\nVer documentación completa en vault-spec.",
+        "type": "note"
+      },
+      {
+        "method": "PUT",
+        "slug": "typescript-rules",
+        "content": "# TypeScript Rules\n\n- No usar `any`.\n- Siempre tipar los retornos.",
+        "type": "rule"
+      },
+      {
+        "method": "PUT",
+        "slug": "deploy-checklist",
+        "content": "# Deploy Checklist\n\n- [ ] Tests pasando\n- [ ] Migraciones aplicadas",
+        "type": "note"
+      }
+    ]
+  }
+}

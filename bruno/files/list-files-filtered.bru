@@ -1,0 +1,28 @@
+meta {
+  name: List Files (Filtered)
+  type: http
+  seq: 7
+}
+
+get {
+  url: {{baseUrl}}/files
+  body: none
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{token}}
+}
+
+headers {
+  Vault-Version: 2026-05-26
+}
+
+params:query {
+  type: rule
+  q: typescript
+  limit: 20
+  ~freshness: 7d
+  ~has_conflicts: true
+  ~cursor: 2026-05-25T09:00:00.000Z
+}

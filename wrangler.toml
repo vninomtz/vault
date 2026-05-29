@@ -1,0 +1,41 @@
+name = "vault"
+main = "src/index.ts"
+compatibility_date = "2026-05-26"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "vault"
+database_id = "fd908dfe-2770-4e57-aba3-e7a867babd25"
+migrations_dir = "drizzle"
+
+[[r2_buckets]]
+binding = "STORAGE"
+bucket_name = "vault-storage"
+
+[[kv_namespaces]]
+binding = "CACHE"
+id = "3093266e5c694331b39e4b9c0b1207e7"
+
+[[queues.producers]]
+binding = "WEBHOOKS"
+queue = "vault-webhooks"
+
+[[queues.consumers]]
+queue = "vault-webhooks"
+max_batch_size = 100
+max_batch_timeout = 5
+
+[[durable_objects.bindings]]
+name = "REBUILDER"
+class_name = "ProjectionRebuilder"
+
+[[migrations]]
+tag = "v1"
+new_classes = ["ProjectionRebuilder"]
+
+[triggers]
+crons = ["*/15 * * * *"]
+
+[vars]
+VAULT_VERSION = "2026-05-26"
+

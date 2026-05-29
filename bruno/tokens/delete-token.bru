@@ -1,0 +1,19 @@
+meta {
+  name: Delete Token
+  type: http
+  seq: 3
+}
+
+delete {
+  url: {{baseUrl}}/tokens/{{tokenId}}
+  body: none
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{token}}
+}
+
+headers {
+  Vault-Version: 2026-05-26
+}
