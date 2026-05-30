@@ -1,7 +1,7 @@
 meta {
-  name: List Files
+  name: Find File (by name)
   type: http
-  seq: 8
+  seq: 7
 }
 
 get {
@@ -19,5 +19,11 @@ headers {
 }
 
 params:query {
-  limit: 20
+  name: projects/vault/typescript-rules
+}
+
+script:post-response {
+  if (res.status === 200) {
+    bru.setVar("fileId", res.body.file.id);
+  }
 }

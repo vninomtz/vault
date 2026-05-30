@@ -1,0 +1,32 @@
+meta {
+  name: Create File
+  type: http
+  seq: 1
+}
+
+post {
+  url: {{baseUrl}}/files
+  body: json
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{token}}
+}
+
+headers {
+  Vault-Version: 2026-05-26
+}
+
+body:json {
+  {
+    "name": "projects/vault/typescript-rules",
+    "content": "# TypeScript Rules\n\n- No usar `any`.\n- Siempre tipar los retornos de funciones."
+  }
+}
+
+script:post-response {
+  if (res.status === 201) {
+    bru.setVar("fileId", res.body.file.id);
+  }
+}

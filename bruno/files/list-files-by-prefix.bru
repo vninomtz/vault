@@ -1,7 +1,7 @@
 meta {
-  name: List Files (Filtered)
+  name: List Files (by prefix / virtual folder)
   type: http
-  seq: 7
+  seq: 9
 }
 
 get {
@@ -19,10 +19,6 @@ headers {
 }
 
 params:query {
-  type: rule
-  q: typescript
-  limit: 20
-  ~freshness: 7d
-  ~has_conflicts: true
-  ~cursor: 2026-05-25T09:00:00.000Z
+  prefix: projects/vault/
+  limit: 50
 }

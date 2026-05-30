@@ -1,7 +1,7 @@
 meta {
-  name: List Files
+  name: Search Files (full-text)
   type: http
-  seq: 8
+  seq: 10
 }
 
 get {
@@ -19,5 +19,7 @@ headers {
 }
 
 params:query {
+  q: typescript
   limit: 20
+  ~prefix: projects/vault/
 }

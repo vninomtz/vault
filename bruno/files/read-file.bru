@@ -1,11 +1,11 @@
 meta {
-  name: Read File
+  name: Read File (by ID)
   type: http
-  seq: 4
+  seq: 5
 }
 
 get {
-  url: {{baseUrl}}/files/{{slug}}
+  url: {{baseUrl}}/files/{{fileId}}
   body: none
   auth: bearer
 }

@@ -1,12 +1,12 @@
 meta {
-  name: Read File (Markdown)
+  name: Rename / Move File
   type: http
-  seq: 6
+  seq: 4
 }
 
-get {
+patch {
   url: {{baseUrl}}/files/{{fileId}}
-  body: none
+  body: json
   auth: bearer
 }
 
@@ -16,5 +16,10 @@ auth:bearer {
 
 headers {
   Vault-Version: 2026-05-26
-  Accept: text/markdown
+}
+
+body:json {
+  {
+    "name": "archive/typescript-rules"
+  }
 }

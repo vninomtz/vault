@@ -1,0 +1,32 @@
+meta {
+  name: Batch Update (Atomic)
+  type: http
+  seq: 2
+}
+
+post {
+  url: {{baseUrl}}/batch
+  body: json
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{token}}
+}
+
+headers {
+  Vault-Version: 2026-05-26
+}
+
+body:json {
+  {
+    "atomic": true,
+    "operations": [
+      {
+        "id": "{{fileId}}",
+        "content": "# TypeScript Rules\n\n- No usar `any`.",
+        "if_version": 1
+      }
+    ]
+  }
+}
