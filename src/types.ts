@@ -12,6 +12,7 @@ export type SourceType =
 
 export interface Env {
   DB: D1Database;
+  ASSETS: Fetcher;
   CACHE: KVNamespace;
   CF_ACCESS_TEAM: string;
   ENCRYPTION_KEY: string;

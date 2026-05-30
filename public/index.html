@@ -1,0 +1,498 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Vault</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      background: #0f0f0f;
+      color: #e8e8e8;
+      height: 100vh;
+      display: flex;
+      flex-direction: column;
+    }
+
+    header {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      padding: 12px 20px;
+      border-bottom: 1px solid #2a2a2a;
+      background: #141414;
+    }
+
+    header h1 { font-size: 16px; font-weight: 600; letter-spacing: 0.05em; color: #fff; }
+    header span { font-size: 12px; color: #555; }
+
+    .search {
+      margin-left: auto;
+      display: flex;
+      gap: 8px;
+    }
+
+    input, button, textarea {
+      font-family: inherit;
+      font-size: 13px;
+    }
+
+    .search input {
+      background: #1e1e1e;
+      border: 1px solid #2a2a2a;
+      color: #e8e8e8;
+      border-radius: 6px;
+      padding: 6px 10px;
+      width: 220px;
+      outline: none;
+    }
+
+    .search input:focus { border-color: #555; }
+
+    .layout {
+      display: flex;
+      flex: 1;
+      overflow: hidden;
+    }
+
+    .sidebar {
+      width: 280px;
+      border-right: 1px solid #2a2a2a;
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+    }
+
+    .sidebar-header {
+      padding: 10px 14px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      border-bottom: 1px solid #2a2a2a;
+    }
+
+    .sidebar-header span { font-size: 11px; text-transform: uppercase; letter-spacing: 0.08em; color: #555; }
+
+    .btn {
+      background: #1e1e1e;
+      border: 1px solid #2a2a2a;
+      color: #e8e8e8;
+      border-radius: 5px;
+      padding: 4px 10px;
+      cursor: pointer;
+      font-size: 12px;
+    }
+
+    .btn:hover { background: #252525; border-color: #444; }
+    .btn-primary { background: #2a5fff; border-color: #2a5fff; color: #fff; }
+    .btn-primary:hover { background: #3366ff; }
+
+    .file-list {
+      flex: 1;
+      overflow-y: auto;
+      padding: 6px 0;
+    }
+
+    .file-item {
+      padding: 7px 14px;
+      cursor: pointer;
+      border-left: 2px solid transparent;
+      transition: background 0.1s;
+    }
+
+    .file-item:hover { background: #1a1a1a; }
+    .file-item.active { background: #1a1a1a; border-left-color: #2a5fff; }
+
+    .file-name {
+      font-size: 13px;
+      color: #ccc;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .file-name .path-prefix { color: #555; }
+
+    .file-meta {
+      font-size: 11px;
+      color: #444;
+      margin-top: 2px;
+    }
+
+    .main {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+    }
+
+    .editor-header {
+      padding: 10px 20px;
+      border-bottom: 1px solid #2a2a2a;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      min-height: 44px;
+    }
+
+    .editor-header .file-title { font-size: 13px; color: #999; flex: 1; }
+    .editor-header .file-title strong { color: #e8e8e8; }
+
+    .content-area {
+      flex: 1;
+      overflow: hidden;
+      display: flex;
+    }
+
+    #viewer {
+      flex: 1;
+      padding: 28px 36px;
+      overflow-y: auto;
+      line-height: 1.7;
+      font-size: 14px;
+    }
+
+    #viewer h1 { font-size: 22px; margin-bottom: 16px; color: #fff; }
+    #viewer h2 { font-size: 17px; margin: 20px 0 8px; color: #ddd; }
+    #viewer h3 { font-size: 14px; margin: 16px 0 6px; color: #ccc; }
+    #viewer p { margin-bottom: 12px; color: #bbb; }
+    #viewer code { background: #1e1e1e; padding: 1px 5px; border-radius: 3px; font-size: 12px; color: #e8a04a; font-family: "SF Mono", monospace; }
+    #viewer pre { background: #1a1a1a; border: 1px solid #2a2a2a; border-radius: 6px; padding: 14px; margin: 12px 0; overflow-x: auto; }
+    #viewer pre code { background: none; padding: 0; color: #ccc; font-size: 12px; }
+    #viewer ul, #viewer ol { margin: 8px 0 12px 20px; color: #bbb; }
+    #viewer li { margin-bottom: 4px; }
+    #viewer hr { border: none; border-top: 1px solid #2a2a2a; margin: 20px 0; }
+    #viewer a { color: #5588ff; }
+    #viewer blockquote { border-left: 3px solid #333; padding-left: 14px; color: #777; margin: 12px 0; }
+
+    #editor {
+      flex: 1;
+      background: #0f0f0f;
+      border: none;
+      color: #e8e8e8;
+      padding: 28px 36px;
+      resize: none;
+      outline: none;
+      font-family: "SF Mono", "Fira Code", monospace;
+      font-size: 13px;
+      line-height: 1.7;
+      display: none;
+    }
+
+    .empty-state {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      color: #444;
+      gap: 8px;
+    }
+
+    .empty-state svg { opacity: 0.3; }
+    .empty-state p { font-size: 13px; }
+
+    .modal-overlay {
+      position: fixed;
+      inset: 0;
+      background: rgba(0,0,0,0.6);
+      display: none;
+      align-items: center;
+      justify-content: center;
+      z-index: 100;
+    }
+
+    .modal-overlay.open { display: flex; }
+
+    .modal {
+      background: #1a1a1a;
+      border: 1px solid #2a2a2a;
+      border-radius: 10px;
+      padding: 24px;
+      width: 420px;
+      display: flex;
+      flex-direction: column;
+      gap: 14px;
+    }
+
+    .modal h2 { font-size: 15px; color: #fff; }
+
+    .modal input {
+      background: #0f0f0f;
+      border: 1px solid #2a2a2a;
+      color: #e8e8e8;
+      border-radius: 6px;
+      padding: 8px 12px;
+      width: 100%;
+      outline: none;
+    }
+
+    .modal input:focus { border-color: #555; }
+    .modal-actions { display: flex; gap: 8px; justify-content: flex-end; }
+
+    .status { font-size: 11px; padding: 4px 10px; border-radius: 4px; }
+    .status.saving { background: #252525; color: #888; }
+    .status.saved { background: #1a2e1a; color: #4caf50; }
+    .status.error { background: #2e1a1a; color: #f44336; }
+
+    ::-webkit-scrollbar { width: 6px; }
+    ::-webkit-scrollbar-track { background: transparent; }
+    ::-webkit-scrollbar-thumb { background: #2a2a2a; border-radius: 3px; }
+  </style>
+</head>
+<body>
+
+<header>
+  <h1>Vault</h1>
+  <span id="account-name"></span>
+  <div class="search">
+    <input id="search-input" type="text" placeholder="Search files…" />
+  </div>
+</header>
+
+<div class="layout">
+  <aside class="sidebar">
+    <div class="sidebar-header">
+      <span>Files</span>
+      <button class="btn" id="new-file-btn">+ New</button>
+    </div>
+    <div class="file-list" id="file-list">
+      <div class="empty-state"><p>Loading…</p></div>
+    </div>
+  </aside>
+
+  <main class="main">
+    <div class="editor-header" id="editor-header" style="display:none">
+      <span class="file-title" id="file-title"></span>
+      <span class="status" id="save-status"></span>
+      <button class="btn" id="edit-btn">Edit</button>
+      <button class="btn btn-primary" id="save-btn" style="display:none">Save</button>
+      <button class="btn" id="cancel-btn" style="display:none">Cancel</button>
+    </div>
+    <div class="content-area">
+      <div id="viewer"></div>
+      <textarea id="editor" spellcheck="false"></textarea>
+      <div class="empty-state" id="empty-state">
+        <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+          <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
+          <polyline points="14 2 14 8 20 8"/>
+        </svg>
+        <p>Select a file or create a new one</p>
+      </div>
+    </div>
+  </main>
+</div>
+
+<!-- New File Modal -->
+<div class="modal-overlay" id="modal">
+  <div class="modal">
+    <h2>New File</h2>
+    <input id="modal-name" type="text" placeholder="Name or path (e.g. projects/vault/spec)" />
+    <div class="modal-actions">
+      <button class="btn" id="modal-cancel">Cancel</button>
+      <button class="btn btn-primary" id="modal-create">Create</button>
+    </div>
+  </div>
+</div>
+
+<script type="module">
+  const API = "/api";
+  let allFiles = [];
+  let currentFile = null;
+  let editing = false;
+  let saveTimer = null;
+
+  // ── Markdown renderer (minimal) ──────────────────────────────────────────
+  function renderMarkdown(md) {
+    return md
+      .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
+      .replace(/```([\s\S]*?)```/g, (_, code) => `<pre><code>${code.trim()}</code></pre>`)
+      .replace(/`([^`]+)`/g, (_, c) => `<code>${c}</code>`)
+      .replace(/^### (.+)$/gm, (_, t) => `<h3>${t}</h3>`)
+      .replace(/^## (.+)$/gm, (_, t) => `<h2>${t}</h2>`)
+      .replace(/^# (.+)$/gm, (_, t) => `<h1>${t}</h1>`)
+      .replace(/^\*\*(.+)\*\*$/gm, (_, t) => `<strong>${t}</strong>`)
+      .replace(/\*\*(.+?)\*\*/g, (_, t) => `<strong>${t}</strong>`)
+      .replace(/\*(.+?)\*/g, (_, t) => `<em>${t}</em>`)
+      .replace(/^---$/gm, "<hr>")
+      .replace(/^- (.+)$/gm, (_, t) => `<li>${t}</li>`)
+      .replace(/(<li>[\s\S]*?<\/li>)/g, (m) => `<ul>${m}</ul>`)
+      .replace(/\n\n/g, "</p><p>")
+      .replace(/^(?!<[hup]|<li|<hr|<pre)(.+)$/gm, (_, t) => `<p>${t}</p>`);
+  }
+
+  // ── API helpers ───────────────────────────────────────────────────────────
+  async function apiFetch(path, opts = {}) {
+    const res = await fetch(API + path, {
+      headers: { "Content-Type": "application/json", "Vault-Version": "2026-05-26", ...opts.headers },
+      ...opts,
+    });
+    return res;
+  }
+
+  // ── Load file list ────────────────────────────────────────────────────────
+  async function loadFiles(q = "") {
+    const url = q ? `/files?q=${encodeURIComponent(q)}` : "/files?limit=100";
+    const res = await apiFetch(url);
+    const { files } = await res.json();
+    allFiles = files ?? [];
+    renderList(allFiles);
+  }
+
+  function renderList(list) {
+    const el = document.getElementById("file-list");
+    if (!list.length) {
+      el.innerHTML = `<div class="empty-state"><p>No files</p></div>`;
+      return;
+    }
+    el.innerHTML = list.map(f => {
+      const parts = f.name.split("/");
+      const basename = parts.pop();
+      const prefix = parts.length ? parts.join("/") + "/" : "";
+      const active = currentFile?.id === f.id ? "active" : "";
+      const date = new Date(f.updated_at).toLocaleDateString();
+      return `
+        <div class="file-item ${active}" data-id="${f.id}" data-name="${f.name}">
+          <div class="file-name"><span class="path-prefix">${prefix}</span>${basename}</div>
+          <div class="file-meta">v${f.version} · ${date}</div>
+        </div>`;
+    }).join("");
+
+    el.querySelectorAll(".file-item").forEach(item => {
+      item.addEventListener("click", () => openFile(item.dataset.id, item.dataset.name));
+    });
+  }
+
+  // ── Open file ─────────────────────────────────────────────────────────────
+  async function openFile(id, name) {
+    const res = await apiFetch(`/files/${id}`);
+    const { file } = await res.json();
+    currentFile = file;
+    editing = false;
+
+    document.getElementById("editor-header").style.display = "flex";
+    document.getElementById("empty-state").style.display = "none";
+
+    const title = document.getElementById("file-title");
+    const parts = name.split("/");
+    const base = parts.pop();
+    const prefix = parts.length ? parts.join("/") + "/" : "";
+    title.innerHTML = `<span style="color:#555">${prefix}</span><strong>${base}</strong>`;
+
+    document.getElementById("viewer").innerHTML = renderMarkdown(file.content ?? "");
+    document.getElementById("viewer").style.display = "block";
+    document.getElementById("editor").style.display = "none";
+    document.getElementById("edit-btn").style.display = "inline-block";
+    document.getElementById("save-btn").style.display = "none";
+    document.getElementById("cancel-btn").style.display = "none";
+    document.getElementById("save-status").textContent = "";
+
+    // Highlight in sidebar
+    document.querySelectorAll(".file-item").forEach(el => {
+      el.classList.toggle("active", el.dataset.id === id);
+    });
+  }
+
+  // ── Edit mode ─────────────────────────────────────────────────────────────
+  document.getElementById("edit-btn").addEventListener("click", () => {
+    editing = true;
+    const editor = document.getElementById("editor");
+    editor.value = currentFile.content ?? "";
+    editor.style.display = "block";
+    document.getElementById("viewer").style.display = "none";
+    document.getElementById("edit-btn").style.display = "none";
+    document.getElementById("save-btn").style.display = "inline-block";
+    document.getElementById("cancel-btn").style.display = "inline-block";
+    editor.focus();
+  });
+
+  document.getElementById("cancel-btn").addEventListener("click", () => {
+    editing = false;
+    document.getElementById("editor").style.display = "none";
+    document.getElementById("viewer").style.display = "block";
+    document.getElementById("edit-btn").style.display = "inline-block";
+    document.getElementById("save-btn").style.display = "none";
+    document.getElementById("cancel-btn").style.display = "none";
+    document.getElementById("save-status").textContent = "";
+  });
+
+  document.getElementById("save-btn").addEventListener("click", () => saveFile());
+
+  async function saveFile() {
+    const content = document.getElementById("editor").value;
+    const status = document.getElementById("save-status");
+    status.className = "status saving";
+    status.textContent = "Saving…";
+
+    const res = await apiFetch(`/files/${currentFile.id}`, {
+      method: "PUT",
+      body: JSON.stringify({ content }),
+    });
+
+    if (res.ok) {
+      const { file } = await res.json();
+      currentFile = { ...currentFile, ...file };
+      document.getElementById("viewer").innerHTML = renderMarkdown(content);
+      status.className = "status saved";
+      status.textContent = "Saved";
+      setTimeout(() => { status.textContent = ""; }, 2000);
+      await loadFiles();
+    } else {
+      status.className = "status error";
+      status.textContent = "Error saving";
+    }
+  }
+
+  // ── New file modal ────────────────────────────────────────────────────────
+  document.getElementById("new-file-btn").addEventListener("click", () => {
+    document.getElementById("modal").classList.add("open");
+    document.getElementById("modal-name").value = "";
+    setTimeout(() => document.getElementById("modal-name").focus(), 50);
+  });
+
+  document.getElementById("modal-cancel").addEventListener("click", () => {
+    document.getElementById("modal").classList.remove("open");
+  });
+
+  document.getElementById("modal-create").addEventListener("click", createFile);
+  document.getElementById("modal-name").addEventListener("keydown", e => {
+    if (e.key === "Enter") createFile();
+    if (e.key === "Escape") document.getElementById("modal").classList.remove("open");
+  });
+
+  async function createFile() {
+    const name = document.getElementById("modal-name").value.trim();
+    if (!name) return;
+
+    const res = await apiFetch("/files", {
+      method: "POST",
+      body: JSON.stringify({ name, content: `# ${name.split("/").pop()}\n\n` }),
+    });
+
+    if (res.ok) {
+      const { file } = await res.json();
+      document.getElementById("modal").classList.remove("open");
+      await loadFiles();
+      await openFile(file.id, file.name);
+      // Enter edit mode immediately
+      document.getElementById("edit-btn").click();
+    } else {
+      const { error } = await res.json();
+      alert(error?.message ?? "Error creating file");
+    }
+  }
+
+  // ── Search ────────────────────────────────────────────────────────────────
+  let searchTimer;
+  document.getElementById("search-input").addEventListener("input", e => {
+    clearTimeout(searchTimer);
+    searchTimer = setTimeout(() => loadFiles(e.target.value), 300);
+  });
+
+  // ── Init ──────────────────────────────────────────────────────────────────
+  loadFiles();
+</script>
+</body>
+</html>

@@ -20,6 +20,7 @@ const SYSTEM_ACCOUNT_ID = "01SYSTEM000000000000000000";
 // ─── App ─────────────────────────────────────────────────────────────────────
 
 const app = new Hono<HonoEnv>();
+const api = app.basePath("/api");
 
 // ─── CORS ─────────────────────────────────────────────────────────────────────
 
@@ -88,7 +89,7 @@ app.use("*", async (c, next) => {
 // ─── Files ───────────────────────────────────────────────────────────────────
 
 // POST /files — create a new file, server assigns ID
-app.post("/files", async (c) => {
+api.post("/files", async (c) => {
   const actor = c.get("actor");
   const body = await c.req.json<{
     name: string;
@@ -153,7 +154,7 @@ app.post("/files", async (c) => {
 });
 
 // PUT /files/:id — update content by ID
-app.put("/files/:id", async (c) => {
+api.put("/files/:id", async (c) => {
   const id = c.req.param("id");
   const actor = c.get("actor");
   const body = await c.req.json<{
@@ -209,7 +210,7 @@ app.put("/files/:id", async (c) => {
 });
 
 // PATCH /files/:id — rename / move
-app.patch("/files/:id", async (c) => {
+api.patch("/files/:id", async (c) => {
   const id = c.req.param("id");
   const actor = c.get("actor");
   const body = await c.req.json<{ name: string }>();
@@ -238,7 +239,7 @@ app.patch("/files/:id", async (c) => {
 });
 
 // GET /files/:id — read by ID
-app.get("/files/:id", async (c) => {
+api.get("/files/:id", async (c) => {
   const id = c.req.param("id");
   const actor = c.get("actor");
 
@@ -275,7 +276,7 @@ app.get("/files/:id", async (c) => {
 // ?name=    exact name lookup
 // ?prefix=  list files under a virtual path
 // ?q=       full-text search
-app.get("/files", async (c) => {
+api.get("/files", async (c) => {
   const actor = c.get("actor");
   const db = createDb(c.env.DB);
 
@@ -302,51 +303,48 @@ app.get("/files", async (c) => {
     return c.json({ file: { id: file.id, name: file.name, content: projection?.content ?? "", version: file.currentVersion, updated_at: new Date(file.updatedAt).toISOString() } });
   }
 
-  // List with optional prefix / full-text
+  // List with optional prefix / full-text — no content in response
   let query = db
-    .select()
+    .select({ id: files.id, name: files.name, currentVersion: files.currentVersion, updatedAt: files.updatedAt })
     .from(files)
     .where(eq(files.accountId, actor.accountId!))
     .orderBy(desc(files.updatedAt))
     .limit(limit + 1)
     .$dynamic();
 
-  if (prefix) query = query.where(and(eq(files.accountId, actor.accountId!)));
   if (cursor) query = query.where(and(eq(files.accountId, actor.accountId!), lt(files.updatedAt, new Date(cursor).getTime())));
 
   const rows = await query.all();
+  const prefixFiltered = prefix ? rows.filter(f => f.name.startsWith(prefix)) : rows;
+  const hasMore = prefixFiltered.length > limit;
+  const page = prefixFiltered.slice(0, limit);
 
-  const filtered = rows
-    .filter(f => !prefix || f.name.startsWith(prefix))
-    .slice(0, limit);
+  // Full-text search requires loading projections — only when ?q= is present
+  let out: typeof page;
+  if (q) {
+    const withMatch = await Promise.all(
+      page.map(async (file) => {
+        const projection = await readProjection(c.env, actor.accountId!, file.name);
+        return (projection?.content ?? "").toLowerCase().includes(q.toLowerCase()) ? file : null;
+      }),
+    );
+    out = withMatch.filter(Boolean) as typeof page;
+  } else {
+    out = page;
+  }
 
-  const hasMore = rows.length > limit;
+  const nextCursor = hasMore ? new Date(page[page.length - 1]?.updatedAt ?? 0).toISOString() : null;
 
-  const results = await Promise.all(
-    filtered.map(async (file) => {
-      const projection = await readProjection(c.env, actor.accountId!, file.name);
-      const content = projection?.content ?? "";
-      if (q && !content.toLowerCase().includes(q.toLowerCase())) return null;
-      return {
-        id: file.id,
-        name: file.name,
-        content,
-        version: file.currentVersion,
-        updated_at: new Date(file.updatedAt).toISOString(),
-        freshness: projection?.freshness ?? "unknown",
-      };
-    }),
-  );
-
-  const out = results.filter(Boolean);
-  const nextCursor = hasMore ? new Date(filtered[filtered.length - 1]?.updatedAt ?? 0).toISOString() : null;
-
-  return c.json({ files: out, next_cursor: nextCursor, total: out.length });
+  return c.json({
+    files: out.map(f => ({ id: f.id, name: f.name, version: f.currentVersion, updated_at: new Date(f.updatedAt).toISOString() })),
+    next_cursor: nextCursor,
+    total: out.length,
+  });
 });
 
 // ─── Batch ────────────────────────────────────────────────────────────────────
 
-app.post("/batch", async (c) => {
+api.post("/batch", async (c) => {
   const actor = c.get("actor");
   const body = await c.req.json<{
     atomic?: boolean;
@@ -411,7 +409,7 @@ app.post("/batch", async (c) => {
 
 // ─── Tokens ───────────────────────────────────────────────────────────────────
 
-app.post("/tokens", async (c) => {
+api.post("/tokens", async (c) => {
   const actor = c.get("actor");
   const body = await c.req.json<{
     name: string;
@@ -458,7 +456,7 @@ app.post("/tokens", async (c) => {
   return c.json({ token: rawToken, name: body.name, read: readScope, write: writeScope }, 201);
 });
 
-app.delete("/tokens/:id", async (c) => {
+api.delete("/tokens/:id", async (c) => {
   const id = c.req.param("id");
   const actor = c.get("actor");
   const db = createDb(c.env.DB);
@@ -480,7 +478,7 @@ app.delete("/tokens/:id", async (c) => {
 
 // ─── Sources ─────────────────────────────────────────────────────────────────
 
-app.post("/sources", async (c) => {
+api.post("/sources", async (c) => {
   const body = await c.req.json<{
     name: string;
     type: string;
@@ -524,7 +522,7 @@ app.post("/sources", async (c) => {
   );
 });
 
-app.patch("/sources/:id", async (c) => {
+api.patch("/sources/:id", async (c) => {
   const id = c.req.param("id");
   const body = await c.req.json<{ status?: string; confidence?: string }>();
   const db = createDb(c.env.DB);
@@ -541,7 +539,7 @@ app.patch("/sources/:id", async (c) => {
   return c.json({ updated: true });
 });
 
-app.post("/sources/:id/import", async (c) => {
+api.post("/sources/:id/import", async (c) => {
   const id = c.req.param("id");
   const db = createDb(c.env.DB);
   const source = await db.select({ id: sources.id }).from(sources).where(eq(sources.id, id)).get();
@@ -568,7 +566,7 @@ app.post("/sources/:id/import", async (c) => {
   );
 });
 
-app.get("/sources/:id/import/:importId", async (c) => {
+api.get("/sources/:id/import/:importId", async (c) => {
   const importId = c.req.param("importId");
   const status = await c.env.CACHE.get(`import:${importId}`, "json");
   if (!status)
@@ -578,7 +576,7 @@ app.get("/sources/:id/import/:importId", async (c) => {
 
 // ─── Subscriptions ────────────────────────────────────────────────────────────
 
-app.post("/subscriptions", async (c) => {
+api.post("/subscriptions", async (c) => {
   const actor = c.get("actor");
   const body = await c.req.json<{
     filter?: Record<string, unknown>;
@@ -614,7 +612,7 @@ app.post("/subscriptions", async (c) => {
   return c.json({ id, channel: body.channel, filter: body.filter ?? {} }, 201);
 });
 
-app.delete("/subscriptions/:id", async (c) => {
+api.delete("/subscriptions/:id", async (c) => {
   const id = c.req.param("id");
   const actor = c.get("actor");
   const db = createDb(c.env.DB);
@@ -636,7 +634,7 @@ app.delete("/subscriptions/:id", async (c) => {
 
 // ─── Advanced (admin scope) ───────────────────────────────────────────────────
 
-app.get("/files/:slug/history", async (c) => {
+api.get("/files/:slug/history", async (c) => {
   const actor = c.get("actor");
   const slug = c.req.param("slug");
   const db = createDb(c.env.DB);
@@ -661,7 +659,7 @@ app.get("/files/:slug/history", async (c) => {
   return c.json({ entries: allEntries });
 });
 
-app.get("/files/:slug/conflicts", async (c) => {
+api.get("/files/:slug/conflicts", async (c) => {
   const actor = c.get("actor");
   const slug = c.req.param("slug");
   const db = createDb(c.env.DB);
@@ -672,7 +670,7 @@ app.get("/files/:slug/conflicts", async (c) => {
   return c.json({ conflicts: allConflicts });
 });
 
-app.post("/files/:slug/conflicts/:conflictId/resolve", async (c) => {
+api.post("/files/:slug/conflicts/:conflictId/resolve", async (c) => {
   const actor = c.get("actor");
   const slug = c.req.param("slug");
   const conflictId = c.req.param("conflictId");
@@ -785,6 +783,6 @@ async function resolveHumanActor(
 
 // ─── MCP ─────────────────────────────────────────────────────────────────────
 
-app.all("/mcp", (c) => handleMcp(c.req.raw, c.env, c.get("actor").accountId ?? SYSTEM_ACCOUNT_ID));
+api.all("/mcp", (c) => handleMcp(c.req.raw, c.env, c.get("actor").accountId ?? SYSTEM_ACCOUNT_ID));
 
 export default app;

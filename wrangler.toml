@@ -1,5 +1,6 @@
 name = "vault-api"
 main = "src/index.ts"
+assets = { directory = "./public", binding = "ASSETS" }
 compatibility_date = "2026-05-26"
 
 [[d1_databases]]
