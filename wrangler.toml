@@ -23,6 +23,6 @@ invocation_logs = true
 [vars]
 VAULT_VERSION = "2026-05-26"
 ENVIRONMENT = "production"
-TEAM_DOMAIN = "https://ninomtz.cloudflareaccess.com"
+TEAM_DOMAIN = "https://nameless-resonance-af6e.cloudflareaccess.com"
 #POLICY_AUD = "replace-with-your-access-application-aud-tag"
 
