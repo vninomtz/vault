@@ -1,6 +1,7 @@
 import { Hono } from "hono";
 import { cors } from "hono/cors";
 import { handleMcp } from "./mcp";
+import { validateAccessJWT } from "./auth";
 import { eq, desc, asc, lt, and } from "drizzle-orm";
 import { createDb } from "./db/index";
 import { files, entries, tokens, sources, subscriptions, conflicts, authors, accounts } from "./db/schema";
@@ -37,24 +38,22 @@ app.use(
 // ─── Auth ─────────────────────────────────────────────────────────────────────
 
 app.use("*", async (c, next) => {
-  const auth = c.req.header("Authorization") ?? "";
-  const cfJwt = c.req.header("CF-Access-Jwt-Assertion") ?? "";
-
-  if (cfJwt) {
-    const identity = await validateAccessJwt(cfJwt, c.env.CF_ACCESS_TEAM ?? "");
-    if (!identity) return c.json({ error: { code: "unauthorized", message: "Invalid Cloudflare Access token" } }, 401);
-    const db = createDb(c.env.DB);
-    const actor = await resolveHumanActor(db, identity.email);
-    c.set("actor", actor);
+  // Skip auth for CORS preflight and public discovery endpoints.
+  if (c.req.method === "OPTIONS" || c.req.path.startsWith("/.well-known/")) {
     return next();
   }
 
+  const auth = c.req.header("Authorization") ?? "";
+
+  // Agents / pipelines authenticate with a vlt_ bearer token.
   if (auth.startsWith("Bearer vlt_")) {
     const hash = await sha256(auth.slice(7));
     const db = createDb(c.env.DB);
     const row = await db.select().from(tokens).where(eq(tokens.tokenHash, hash)).get();
     const expired = row?.expiresAt != null && row.expiresAt < Date.now();
-    if (!row || expired) return c.json({ error: { code: "unauthorized", message: "Invalid or expired token" } }, 401);
+    if (!row || expired) {
+      return c.json({ error: { code: "unauthorized", message: "Invalid or expired token" } }, 401);
+    }
     c.set("actor", {
       id: row.actorId,
       accountId: row.accountId,
@@ -65,9 +64,22 @@ app.use("*", async (c, next) => {
     return next();
   }
 
-  // TODO: remove — dev bypass
-  c.set("actor", { id: SYSTEM_AUTHOR_ID, accountId: SYSTEM_ACCOUNT_ID, kind: "system", isSystem: true, read: ["*:*"], write: ["*:*"] });
-  return next();
+  // Humans authenticate via Cloudflare Access (JWT in header or cookie).
+  const identity = await validateAccessJWT(c.req.raw, c.env);
+  if (identity) {
+    const db = createDb(c.env.DB);
+    const actor = await resolveHumanActor(db, identity.email);
+    c.set("actor", actor);
+    return next();
+  }
+
+  // Local development bypass — only when explicitly in dev.
+  if (c.env.ENVIRONMENT === "development") {
+    c.set("actor", { id: SYSTEM_AUTHOR_ID, accountId: SYSTEM_ACCOUNT_ID, kind: "system", isSystem: true, read: ["*:*"], write: ["*:*"] });
+    return next();
+  }
+
+  return c.json({ error: { code: "unauthorized", message: "Authentication required" } }, 401);
 });
 
 // ─── Rate limit ───────────────────────────────────────────────────────────────
@@ -740,19 +752,6 @@ function isScopeSubset(parent: string[], child: string[]): boolean {
 
 
 // ─── Auth helpers ────────────────────────────────────────────────────────────
-
-async function validateAccessJwt(jwt: string, team: string): Promise<{ email: string } | null> {
-  try {
-    await fetch(`https://${team}.cloudflareaccess.com/cdn-cgi/access/certs`);
-    const [, payloadB64] = jwt.split(".");
-    const payload = JSON.parse(atob(payloadB64)) as { email?: string; exp?: number };
-    if (!payload.email) return null;
-    if (payload.exp && payload.exp * 1000 < Date.now()) return null;
-    return { email: payload.email };
-  } catch {
-    return null;
-  }
-}
 
 async function resolveHumanActor(
   db: ReturnType<typeof createDb>,

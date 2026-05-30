@@ -14,7 +14,8 @@ export interface Env {
   DB: D1Database;
   ASSETS: Fetcher;
   CACHE: KVNamespace;
-  CF_ACCESS_TEAM: string;
+  TEAM_DOMAIN: string;
+  POLICY_AUD: string;
   ENCRYPTION_KEY: string;
   VAULT_VERSION: string;
   ENVIRONMENT: string;
