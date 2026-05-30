@@ -2,7 +2,7 @@
   "mcpServers": {
     "vault": {
       "type": "http",
-      "url": "https://vault-api.ninomtz-victor.workers.dev/mcp"
+      "url": "https://vault-api.ninomtz-victor.workers.dev/api/mcp"
     }
   }
 }

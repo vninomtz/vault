@@ -1,10 +1,11 @@
-import { eq, max } from "drizzle-orm";
+import { eq, and } from "drizzle-orm";
+import { max } from "drizzle-orm";
 import { createDb } from "../db/index";
 import { entries, files, entryReferences, snapshots } from "../db/schema";
 import { ulid } from "../utils";
 import { generateHLC } from "./hlc";
 import { ConflictError } from "../types";
-import type { Env, AppendEntryParams, EntryResult } from "../types";
+import type { Env, AppendEntryParams, EntryResult, Confidence } from "../types";
 
 async function nextGlobalPosition(db: ReturnType<typeof createDb>): Promise<number> {
   const row = await db.select({ max: max(entries.globalPosition) }).from(entries).get();
@@ -109,4 +110,50 @@ export async function appendEntry(env: Env, params: AppendEntryParams): Promise<
   await maybeSnapshot(db, file.id, sequenceNumber, file.snapshotPolicy);
 
   return { id: entryId, sequenceNumber, globalPosition, hlc };
+}
+
+/**
+ * Replaces a file's content. Creates a supersedes entry that references all
+ * existing non-tombstoned entries so the projection shows only the new content
+ * instead of concatenating old + new. Used by PUT /files/:id and MCP update_file.
+ */
+export async function replaceContent(
+  env: Env,
+  params: {
+    accountId: string;
+    fileId: string;
+    content: string;
+    authorId: string;
+    sourceId: string;
+    confidence?: Confidence;
+    idempotencyKey?: string;
+    expectedVersion?: number;
+  },
+): Promise<EntryResult> {
+  const db = createDb(env.DB);
+
+  const file = await db.select({ type: files.type }).from(files).where(eq(files.id, params.fileId)).get();
+  if (!file) throw new Error(`File ${params.fileId} not found`);
+
+  const existing = await db
+    .select({ id: entries.id })
+    .from(entries)
+    .where(and(eq(entries.fileId, params.fileId), eq(entries.tombstone, 0)))
+    .all();
+  const references = existing.map((e) => e.id);
+
+  return appendEntry(env, {
+    accountId: params.accountId,
+    fileId: params.fileId,
+    content: params.content,
+    contentRef: null,
+    type: file.type,
+    intent: references.length > 0 ? "supersedes" : "genesis",
+    authorId: params.authorId,
+    sourceId: params.sourceId,
+    confidence: params.confidence ?? "medium",
+    references,
+    idempotencyKey: params.idempotencyKey ?? ulid(),
+    expectedVersion: params.expectedVersion,
+  });
 }

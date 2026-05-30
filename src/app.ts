@@ -5,7 +5,7 @@ import { validateAccessJWT } from "./auth";
 import { eq, desc, asc, lt, and } from "drizzle-orm";
 import { createDb } from "./db/index";
 import { files, entries, tokens, sources, subscriptions, conflicts, authors, accounts } from "./db/schema";
-import { appendEntry } from "./domain/append-log";
+import { appendEntry, replaceContent } from "./domain/append-log";
 import { readProjection } from "./domain/projection-engine";
 import { ulid, sha256 } from "./utils";
 import { ConflictError } from "./types";
@@ -187,29 +187,18 @@ api.put("/files/:id", async (c) => {
     .where(and(eq(files.id, id), eq(files.accountId, actor.accountId!)))
     .get();
   if (!file) return c.json({ error: { code: "not_found", message: `File '${id}' not found` } }, 404);
-
-  // Fetch all existing entry IDs so the new entry supersedes them —
-  // otherwise the projection engine concatenates old + new content.
-  const existingEntries = await db
-    .select({ id: entries.id })
-    .from(entries)
-    .where(and(eq(entries.fileId, file.id), eq(entries.tombstone, 0)))
-    .all();
-  const supersedes = existingEntries.map((e) => e.id);
+  if (!body.content)
+    return c.json({ error: { code: "invalid", message: '"content" is required' } }, 422);
 
   try {
-    const result = await appendEntry(c.env, {
+    const result = await replaceContent(c.env, {
       accountId: actor.accountId!,
       fileId: file.id,
-      content: body.content ?? null,
-      contentRef: body.content_ref ?? null,
-      type: file.type,
-      intent: supersedes.length > 0 ? "supersedes" : "genesis",
+      content: body.content,
       authorId: actor.id ?? SYSTEM_AUTHOR_ID,
       sourceId: SYSTEM_SOURCE_ID,
       confidence: (body.meta?.confidence ?? "medium") as Confidence,
-      references: supersedes,
-      idempotencyKey: body.idempotency_key ?? ulid(),
+      idempotencyKey: body.idempotency_key,
       expectedVersion: body.if_version,
     });
 

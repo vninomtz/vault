@@ -4,7 +4,7 @@ import { z } from "zod";
 import { eq, desc, and } from "drizzle-orm";
 import { createDb } from "./db/index";
 import { files } from "./db/schema";
-import { appendEntry } from "./domain/append-log";
+import { appendEntry, replaceContent } from "./domain/append-log";
 import { readProjection } from "./domain/projection-engine";
 import { ulid } from "./utils";
 import type { Env } from "./types";
@@ -85,18 +85,12 @@ function createServer(env: Env, accountId: string): McpServer {
     async ({ id, content }) => {
       const file = await db.select().from(files).where(and(eq(files.id, id), eq(files.accountId, accountId))).get();
       if (!file) return { content: [{ type: "text", text: `File '${id}' no encontrado` }] };
-      const result = await appendEntry(env, {
+      const result = await replaceContent(env, {
         accountId,
         fileId: file.id,
         content,
-        contentRef: null,
-        type: file.type,
-        intent: "addition",
         authorId: SYSTEM_AUTHOR_ID,
         sourceId: SYSTEM_SOURCE_ID,
-        confidence: "medium",
-        references: [],
-        idempotencyKey: ulid(),
       });
       return { content: [{ type: "text", text: `Actualizado '${file.name}' (v${result.sequenceNumber})` }] };
     },
