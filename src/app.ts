@@ -176,6 +176,15 @@ api.put("/files/:id", async (c) => {
     .get();
   if (!file) return c.json({ error: { code: "not_found", message: `File '${id}' not found` } }, 404);
 
+  // Fetch all existing entry IDs so the new entry supersedes them —
+  // otherwise the projection engine concatenates old + new content.
+  const existingEntries = await db
+    .select({ id: entries.id })
+    .from(entries)
+    .where(and(eq(entries.fileId, file.id), eq(entries.tombstone, 0)))
+    .all();
+  const supersedes = existingEntries.map((e) => e.id);
+
   try {
     const result = await appendEntry(c.env, {
       accountId: actor.accountId!,
@@ -183,11 +192,11 @@ api.put("/files/:id", async (c) => {
       content: body.content ?? null,
       contentRef: body.content_ref ?? null,
       type: file.type,
-      intent: "addition",
+      intent: supersedes.length > 0 ? "supersedes" : "genesis",
       authorId: actor.id ?? SYSTEM_AUTHOR_ID,
       sourceId: SYSTEM_SOURCE_ID,
       confidence: (body.meta?.confidence ?? "medium") as Confidence,
-      references: [...(body.meta?.supersedes ?? []), ...(body.meta?.references ?? [])],
+      references: supersedes,
       idempotencyKey: body.idempotency_key ?? ulid(),
       expectedVersion: body.if_version,
     });
