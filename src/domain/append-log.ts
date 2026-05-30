@@ -1,4 +1,4 @@
-import { eq, max } from "drizzle-orm";
+import { eq, max, and } from "drizzle-orm";
 import { createDb } from "../db/index";
 import { entries, files, entryReferences, snapshots } from "../db/schema";
 import { ulid } from "../utils";
@@ -72,8 +72,12 @@ export async function appendEntry(env: Env, params: AppendEntryParams): Promise<
     return { ...existing, idempotent: true };
   }
 
-  // 2. Get or create File
-  let file = await db.select().from(files).where(eq(files.slug, params.fileSlug)).get();
+  // 2. Get or create File (scoped to account)
+  let file = await db
+    .select()
+    .from(files)
+    .where(and(eq(files.accountId, params.accountId), eq(files.slug, params.fileSlug)))
+    .get();
 
   if (!file) {
     const fileId = ulid();
@@ -82,6 +86,7 @@ export async function appendEntry(env: Env, params: AppendEntryParams): Promise<
       .insert(files)
       .values({
         id: fileId,
+        accountId: params.accountId,
         slug: params.fileSlug,
         name: params.fileSlug,
         type: params.type,

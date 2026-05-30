@@ -7,6 +7,14 @@ import {
   primaryKey,
 } from "drizzle-orm/sqlite-core";
 
+export const accounts = sqliteTable("accounts", {
+  id: text("id", { length: 26 }).primaryKey(),
+  name: text("name").notNull(),
+  slug: text("slug").notNull().unique(),
+  createdAt: integer("created_at").notNull(),
+});
+
+
 export const sources = sqliteTable(
   "sources",
   {
@@ -34,17 +42,25 @@ export const authors = sqliteTable(
     id: text("id", { length: 26 }).primaryKey(),
     name: text("name").notNull(),
     kind: text("kind", { enum: ["human", "agent", "system"] }).notNull(),
+    accountId: text("account_id", { length: 26 }).references(() => accounts.id),
     sourceId: text("source_id", { length: 26 }).references(() => sources.id),
     createdAt: integer("created_at").notNull(),
   },
-  (t) => [index("idx_authors_kind").on(t.kind), index("idx_authors_source_id").on(t.sourceId)],
+  (t) => [
+    index("idx_authors_kind").on(t.kind),
+    index("idx_authors_account_id").on(t.accountId),
+    index("idx_authors_source_id").on(t.sourceId),
+  ],
 );
 
 export const files = sqliteTable(
   "files",
   {
     id: text("id", { length: 26 }).primaryKey(),
-    slug: text("slug").notNull().unique(),
+    accountId: text("account_id", { length: 26 })
+      .notNull()
+      .references(() => accounts.id),
+    slug: text("slug").notNull(),
     name: text("name").notNull(),
     type: text("type", {
       enum: ["note", "rule", "skill", "policy", "context", "agent"],
@@ -60,6 +76,8 @@ export const files = sqliteTable(
     updatedAt: integer("updated_at").notNull(),
   },
   (t) => [
+    uniqueIndex("idx_files_account_slug").on(t.accountId, t.slug),
+    index("idx_files_account").on(t.accountId),
     index("idx_files_type").on(t.type),
     index("idx_files_status").on(t.status),
     index("idx_files_updated").on(t.updatedAt),
@@ -212,6 +230,9 @@ export const tokens = sqliteTable(
     id: text("id", { length: 26 }).primaryKey(),
     tokenHash: text("token_hash").notNull().unique(),
     name: text("name").notNull(),
+    accountId: text("account_id", { length: 26 })
+      .notNull()
+      .references(() => accounts.id),
     actorId: text("actor_id", { length: 26 })
       .notNull()
       .references(() => authors.id),
@@ -222,7 +243,10 @@ export const tokens = sqliteTable(
     expiresAt: integer("expires_at"),
     createdAt: integer("created_at").notNull(),
   },
-  (t) => [index("idx_tokens_actor_id").on(t.actorId)],
+  (t) => [
+    index("idx_tokens_actor_id").on(t.actorId),
+    index("idx_tokens_account_id").on(t.accountId),
+  ],
 );
 
 export const subscriptions = sqliteTable(

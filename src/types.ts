@@ -21,6 +21,7 @@ export interface Env {
 
 export interface ActorContext {
   id?: string;
+  accountId?: string;
   kind: "human" | "agent" | "system";
   email?: string;
   read?: string[];
@@ -39,6 +40,7 @@ export class ConflictError extends Error {
 }
 
 export interface AppendEntryParams {
+  accountId: string;
   fileSlug: string;
   content: string | null;
   contentRef: string | null;

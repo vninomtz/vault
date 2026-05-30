@@ -3,6 +3,8 @@ import { createDb } from "../db/index";
 import { sources, authors } from "../db/schema";
 import { appendEntry } from "../domain/append-log";
 import type { Env, EntryType, Intent } from "../types";
+
+const SYSTEM_ACCOUNT_ID = "01SYSTEM000000000000000000";
 import type { InferSelectModel } from "drizzle-orm";
 
 type SourceRow = InferSelectModel<typeof sources>;
@@ -74,6 +76,7 @@ async function syncSource(env: Env, source: SourceRow): Promise<void> {
 
   for (const change of changes) {
     await appendEntry(env, {
+      accountId: SYSTEM_ACCOUNT_ID,
       fileSlug: change.slug,
       content: change.content,
       contentRef: null,

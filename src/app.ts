@@ -1,9 +1,9 @@
 import { Hono } from "hono";
 import { cors } from "hono/cors";
 import { handleMcp } from "./mcp";
-import { eq, desc, asc, lt } from "drizzle-orm";
+import { eq, desc, asc, lt, and } from "drizzle-orm";
 import { createDb } from "./db/index";
-import { files, entries, tokens, sources, subscriptions, conflicts, authors } from "./db/schema";
+import { files, entries, tokens, sources, subscriptions, conflicts, authors, accounts } from "./db/schema";
 import { appendEntry } from "./domain/append-log";
 import { readProjection } from "./domain/projection-engine";
 import { ulid, sha256 } from "./utils";
@@ -15,6 +15,7 @@ type HonoEnv = { Bindings: Env; Variables: Variables };
 
 const SYSTEM_SOURCE_ID = "01SYSTEM000000000000000000";
 const SYSTEM_AUTHOR_ID = "01SYSTEM000000000000000001";
+const SYSTEM_ACCOUNT_ID = "01SYSTEM000000000000000000";
 
 // ─── App ─────────────────────────────────────────────────────────────────────
 
@@ -35,8 +36,36 @@ app.use(
 // ─── Auth ─────────────────────────────────────────────────────────────────────
 
 app.use("*", async (c, next) => {
-  // TODO: auth disabled — re-enable when ready
-  c.set("actor", { id: SYSTEM_AUTHOR_ID, kind: "system", isSystem: true, read: ["*:*"], write: ["*:*"] });
+  const auth = c.req.header("Authorization") ?? "";
+  const cfJwt = c.req.header("CF-Access-Jwt-Assertion") ?? "";
+
+  if (cfJwt) {
+    const identity = await validateAccessJwt(cfJwt, c.env.CF_ACCESS_TEAM ?? "");
+    if (!identity) return c.json({ error: { code: "unauthorized", message: "Invalid Cloudflare Access token" } }, 401);
+    const db = createDb(c.env.DB);
+    const actor = await resolveHumanActor(db, identity.email);
+    c.set("actor", actor);
+    return next();
+  }
+
+  if (auth.startsWith("Bearer vlt_")) {
+    const hash = await sha256(auth.slice(7));
+    const db = createDb(c.env.DB);
+    const row = await db.select().from(tokens).where(eq(tokens.tokenHash, hash)).get();
+    const expired = row?.expiresAt != null && row.expiresAt < Date.now();
+    if (!row || expired) return c.json({ error: { code: "unauthorized", message: "Invalid or expired token" } }, 401);
+    c.set("actor", {
+      id: row.actorId,
+      accountId: row.accountId,
+      kind: "agent",
+      read: JSON.parse(row.readScope) as string[],
+      write: JSON.parse(row.writeScope) as string[],
+    });
+    return next();
+  }
+
+  // TODO: remove — dev bypass
+  c.set("actor", { id: SYSTEM_AUTHOR_ID, accountId: SYSTEM_ACCOUNT_ID, kind: "system", isSystem: true, read: ["*:*"], write: ["*:*"] });
   return next();
 });
 
@@ -89,12 +118,13 @@ app.put("/files/:slug", async (c) => {
   const existingFile = await db
     .select({ id: files.id })
     .from(files)
-    .where(eq(files.slug, slug))
+    .where(and(eq(files.accountId, actor.accountId!), eq(files.slug, slug)))
     .get();
   const intent: Intent = existingFile ? "addition" : "genesis";
 
   try {
     const result = await appendEntry(c.env, {
+      accountId: actor.accountId!,
       fileSlug: slug,
       content: body.content ?? null,
       contentRef: body.content_ref ?? null,
@@ -108,8 +138,8 @@ app.put("/files/:slug", async (c) => {
       expectedVersion: body.if_version,
     });
 
-    const file = await db.select().from(files).where(eq(files.slug, slug)).get();
-    const projection = await readProjection(c.env, slug);
+    const file = await db.select().from(files).where(and(eq(files.accountId, actor.accountId!), eq(files.slug, slug))).get();
+    const projection = await readProjection(c.env, actor.accountId!, slug);
     const status = existingFile ? 200 : 201;
 
     return c.json(
@@ -150,11 +180,11 @@ app.get("/files/:slug", async (c) => {
   }
 
   const db = createDb(c.env.DB);
-  const file = await db.select().from(files).where(eq(files.slug, slug)).get();
+  const file = await db.select().from(files).where(and(eq(files.accountId, actor.accountId!), eq(files.slug, slug))).get();
   if (!file)
     return c.json({ error: { code: "not_found", message: `File '${slug}' does not exist` } }, 404);
 
-  const projection = await readProjection(c.env, slug);
+  const projection = await readProjection(c.env, actor.accountId!, slug);
   if (!projection)
     return c.json({ error: { code: "not_found", message: `File '${slug}' does not exist` } }, 404);
 
@@ -178,6 +208,7 @@ app.get("/files/:slug", async (c) => {
 });
 
 app.get("/files", async (c) => {
+  const actor = c.get("actor");
   const type = c.req.query("type");
   const q = c.req.query("q");
   const hasConflictsParam = c.req.query("has_conflicts") === "true";
@@ -210,7 +241,7 @@ app.get("/files", async (c) => {
           .get();
         if (!conflict) return null;
       }
-      const projection = await readProjection(c.env, file.slug);
+      const projection = await readProjection(c.env, actor.accountId!, file.slug);
       const content = projection?.content ?? "";
       if (q && !content.toLowerCase().includes(q.toLowerCase())) return null;
       return {
@@ -269,12 +300,13 @@ app.post("/batch", async (c) => {
     const existingFile = await db
       .select({ id: files.id })
       .from(files)
-      .where(eq(files.slug, op.slug))
+      .where(and(eq(files.accountId, actor.accountId!), eq(files.slug, op.slug)))
       .get();
     const intent: Intent = existingFile ? "addition" : "genesis";
 
     try {
       const result = await appendEntry(c.env, {
+        accountId: actor.accountId!,
         fileSlug: op.slug,
         content: op.content ?? null,
         contentRef: op.content_ref ?? null,
@@ -343,6 +375,7 @@ app.post("/tokens", async (c) => {
       id: ulid(),
       tokenHash,
       name: body.name,
+      accountId: actor.accountId ?? SYSTEM_ACCOUNT_ID,
       actorId: actor.id ?? SYSTEM_AUTHOR_ID,
       readScope: JSON.stringify(readScope),
       writeScope: JSON.stringify(writeScope),
@@ -534,9 +567,10 @@ app.delete("/subscriptions/:id", async (c) => {
 // ─── Advanced (admin scope) ───────────────────────────────────────────────────
 
 app.get("/files/:slug/history", async (c) => {
+  const actor = c.get("actor");
   const slug = c.req.param("slug");
   const db = createDb(c.env.DB);
-  const file = await db.select({ id: files.id }).from(files).where(eq(files.slug, slug)).get();
+  const file = await db.select({ id: files.id }).from(files).where(and(eq(files.accountId, actor.accountId!), eq(files.slug, slug))).get();
   if (!file)
     return c.json({ error: { code: "not_found", message: `File '${slug}' does not exist` } }, 404);
   const allEntries = await db
@@ -558,9 +592,10 @@ app.get("/files/:slug/history", async (c) => {
 });
 
 app.get("/files/:slug/conflicts", async (c) => {
+  const actor = c.get("actor");
   const slug = c.req.param("slug");
   const db = createDb(c.env.DB);
-  const file = await db.select({ id: files.id }).from(files).where(eq(files.slug, slug)).get();
+  const file = await db.select({ id: files.id }).from(files).where(and(eq(files.accountId, actor.accountId!), eq(files.slug, slug))).get();
   if (!file)
     return c.json({ error: { code: "not_found", message: `File '${slug}' does not exist` } }, 404);
   const allConflicts = await db.select().from(conflicts).where(eq(conflicts.fileId, file.id)).all();
@@ -568,10 +603,11 @@ app.get("/files/:slug/conflicts", async (c) => {
 });
 
 app.post("/files/:slug/conflicts/:conflictId/resolve", async (c) => {
+  const actor = c.get("actor");
   const slug = c.req.param("slug");
   const conflictId = c.req.param("conflictId");
   const db = createDb(c.env.DB);
-  const file = await db.select({ id: files.id }).from(files).where(eq(files.slug, slug)).get();
+  const file = await db.select({ id: files.id }).from(files).where(and(eq(files.accountId, actor.accountId!), eq(files.slug, slug))).get();
   if (!file)
     return c.json({ error: { code: "not_found", message: `File '${slug}' does not exist` } }, 404);
 
@@ -587,8 +623,8 @@ app.post("/files/:slug/conflicts/:conflictId/resolve", async (c) => {
   if (!body.content)
     return c.json({ error: { code: "invalid", message: '"content" is required' } }, 422);
 
-  const actor = c.get("actor");
   const result = await appendEntry(c.env, {
+    accountId: actor.accountId!,
     fileSlug: slug,
     content: body.content,
     contentRef: null,
@@ -648,8 +684,59 @@ function isScopeSubset(parent: string[], child: string[]): boolean {
 }
 
 
+// ─── Auth helpers ────────────────────────────────────────────────────────────
+
+async function validateAccessJwt(jwt: string, team: string): Promise<{ email: string } | null> {
+  try {
+    await fetch(`https://${team}.cloudflareaccess.com/cdn-cgi/access/certs`);
+    const [, payloadB64] = jwt.split(".");
+    const payload = JSON.parse(atob(payloadB64)) as { email?: string; exp?: number };
+    if (!payload.email) return null;
+    if (payload.exp && payload.exp * 1000 < Date.now()) return null;
+    return { email: payload.email };
+  } catch {
+    return null;
+  }
+}
+
+async function resolveHumanActor(
+  db: ReturnType<typeof createDb>,
+  email: string,
+): Promise<ActorContext> {
+  // Find existing author by email
+  let author = await db.select().from(authors).where(eq(authors.name, email)).get();
+
+  if (!author) {
+    // Auto-provision: create account + author on first login
+    const accountId = ulid();
+    const authorId = ulid();
+    const slug = email.split("@")[0]!.toLowerCase().replace(/[^a-z0-9]/g, "-");
+    const now = Date.now();
+
+    await db.batch([
+      db.insert(accounts).values({ id: accountId, name: email, slug, createdAt: now }),
+      db.insert(authors).values({ id: authorId, name: email, kind: "human", accountId, createdAt: now }),
+    ]);
+
+    return { id: authorId, accountId, kind: "human", email, read: ["*:*"], write: ["*:*"] };
+  }
+
+  // Author exists but has no account yet — create one
+  if (!author.accountId) {
+    const accountId = ulid();
+    const slug = email.split("@")[0]!.toLowerCase().replace(/[^a-z0-9]/g, "-");
+    await db.batch([
+      db.insert(accounts).values({ id: accountId, name: email, slug, createdAt: Date.now() }),
+      db.update(authors).set({ accountId }).where(eq(authors.id, author.id)),
+    ]);
+    return { id: author.id, accountId, kind: "human", email, read: ["*:*"], write: ["*:*"] };
+  }
+
+  return { id: author.id, accountId: author.accountId, kind: "human", email, read: ["*:*"], write: ["*:*"] };
+}
+
 // ─── MCP ─────────────────────────────────────────────────────────────────────
 
-app.all("/mcp", (c) => handleMcp(c.req.raw, c.env));
+app.all("/mcp", (c) => handleMcp(c.req.raw, c.env, c.get("actor").accountId ?? SYSTEM_ACCOUNT_ID));
 
 export default app;

@@ -1,7 +1,7 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { WebStandardStreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js";
 import { z } from "zod";
-import { eq, desc } from "drizzle-orm";
+import { eq, desc, and } from "drizzle-orm";
 import { createDb } from "./db/index";
 import { files } from "./db/schema";
 import { appendEntry } from "./domain/append-log";
@@ -12,7 +12,7 @@ import type { Env, EntryType } from "./types";
 const SYSTEM_SOURCE_ID = "01SYSTEM000000000000000000";
 const SYSTEM_AUTHOR_ID = "01SYSTEM000000000000000001";
 
-function createServer(env: Env): McpServer {
+function createServer(env: Env, accountId: string): McpServer {
   const server = new McpServer({ name: "vault", version: "1.0.0" });
   const db = createDb(env.DB);
 
@@ -21,7 +21,7 @@ function createServer(env: Env): McpServer {
     "Lee el contenido vigente de un archivo de conocimiento en Vault",
     { slug: z.string().describe("Identificador del archivo (kebab-case)") },
     async ({ slug }) => {
-      const projection = await readProjection(env, slug);
+      const projection = await readProjection(env, accountId, slug);
       if (!projection) return { content: [{ type: "text", text: `File '${slug}' no encontrado` }] };
       return { content: [{ type: "text", text: projection.content }] };
     },
@@ -36,8 +36,9 @@ function createServer(env: Env): McpServer {
       type: z.enum(["note", "rule", "skill", "policy", "context", "agent"]),
     },
     async ({ slug, content, type }) => {
-      const existing = await db.select({ id: files.id }).from(files).where(eq(files.slug, slug)).get();
+      const existing = await db.select({ id: files.id }).from(files).where(and(eq(files.accountId, accountId), eq(files.slug, slug))).get();
       const result = await appendEntry(env, {
+        accountId,
         fileSlug: slug,
         content,
         contentRef: null,
@@ -62,13 +63,13 @@ function createServer(env: Env): McpServer {
       limit: z.number().optional(),
     },
     async ({ type, q, limit = 20 }) => {
-      let query = db.select().from(files).orderBy(desc(files.updatedAt)).limit(limit).$dynamic();
-      if (type) query = query.where(eq(files.type, type as EntryType));
+      let query = db.select().from(files).where(eq(files.accountId, accountId)).orderBy(desc(files.updatedAt)).limit(limit).$dynamic();
+      if (type) query = query.where(and(eq(files.accountId, accountId), eq(files.type, type as EntryType)));
       const rows = await query.all();
 
       const results = await Promise.all(
         rows.map(async (file) => {
-          const projection = await readProjection(env, file.slug);
+          const projection = await readProjection(env, accountId, file.slug);
           const content = projection?.content ?? "";
           if (q && !content.toLowerCase().includes(q.toLowerCase())) return null;
           return { slug: file.slug, type: file.type, content, version: file.currentVersion };
@@ -87,8 +88,8 @@ function createServer(env: Env): McpServer {
     "Lista todos los archivos de Vault",
     { type: z.enum(["note", "rule", "skill", "policy", "context", "agent"]).optional() },
     async ({ type }) => {
-      let query = db.select().from(files).orderBy(desc(files.updatedAt)).$dynamic();
-      if (type) query = query.where(eq(files.type, type as EntryType));
+      let query = db.select().from(files).where(eq(files.accountId, accountId)).orderBy(desc(files.updatedAt)).$dynamic();
+      if (type) query = query.where(and(eq(files.accountId, accountId), eq(files.type, type as EntryType)));
       const rows = await query.all();
       if (!rows.length) return { content: [{ type: "text", text: "Vault vacío." }] };
       return { content: [{ type: "text", text: rows.map(f => `- ${f.slug} (${f.type}, v${f.currentVersion})`).join("\n") }] };
@@ -108,8 +109,9 @@ function createServer(env: Env): McpServer {
     async ({ operations }) => {
       const lines: string[] = [];
       for (const op of operations) {
-        const existing = await db.select({ id: files.id }).from(files).where(eq(files.slug, op.slug)).get();
+        const existing = await db.select({ id: files.id }).from(files).where(and(eq(files.accountId, accountId), eq(files.slug, op.slug))).get();
         const result = await appendEntry(env, {
+          accountId,
           fileSlug: op.slug,
           content: op.content,
           contentRef: null,
@@ -130,9 +132,9 @@ function createServer(env: Env): McpServer {
   return server;
 }
 
-export async function handleMcp(request: Request, env: Env): Promise<Response> {
+export async function handleMcp(request: Request, env: Env, accountId: string): Promise<Response> {
   const transport = new WebStandardStreamableHTTPServerTransport({ sessionIdGenerator: undefined });
-  const server = createServer(env);
+  const server = createServer(env, accountId);
   await server.connect(transport);
   return transport.handleRequest(request);
 }

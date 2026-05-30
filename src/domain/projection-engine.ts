@@ -1,4 +1,4 @@
-import { eq, asc, desc } from "drizzle-orm";
+import { eq, asc, desc, and } from "drizzle-orm";
 import { createDb } from "../db/index";
 import {
   entries,
@@ -129,22 +129,21 @@ export async function materializeProjection(env: Env, fileId: string): Promise<s
 
 export async function readProjection(
   env: Env,
+  accountId: string,
   fileSlug: string,
 ): Promise<{ content: string; freshness: string; hasConflicts: boolean } | null> {
-  // 1. KV cache by slug
-  const cached = await env.CACHE.get<{ content: string; freshness: string }>(
-    `projection:${fileSlug}`,
-    "json",
-  );
+  // 1. KV cache by account+slug
+  const cacheKey = `projection:${accountId}:${fileSlug}`;
+  const cached = await env.CACHE.get<{ content: string; freshness: string }>(cacheKey, "json");
   if (cached) return { ...cached, hasConflicts: false };
 
   const db = createDb(env.DB);
 
-  // 2. Find File
+  // 2. Find File (scoped to account)
   const file = await db
     .select({ id: files.id, status: files.status })
     .from(files)
-    .where(eq(files.slug, fileSlug))
+    .where(and(eq(files.accountId, accountId), eq(files.slug, fileSlug)))
     .get();
   if (!file) return null;
 
@@ -154,9 +153,7 @@ export async function readProjection(
     "json",
   );
   if (cachedById) {
-    await env.CACHE.put(`projection:${fileSlug}`, JSON.stringify(cachedById), {
-      expirationTtl: 3600,
-    });
+    await env.CACHE.put(cacheKey, JSON.stringify(cachedById), { expirationTtl: 3600 });
     const openConflict = await db
       .select({ id: conflicts.id })
       .from(conflicts)
@@ -167,7 +164,7 @@ export async function readProjection(
 
   // 4. Materialize from log
   const content = await materializeProjection(env, file.id);
-  await env.CACHE.put(`projection:${fileSlug}`, JSON.stringify({ content, freshness: "fresh" }), {
+  await env.CACHE.put(cacheKey, JSON.stringify({ content, freshness: "fresh" }), {
     expirationTtl: 3600,
   });
   const openConflict = await db
