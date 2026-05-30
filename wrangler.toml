@@ -12,10 +12,6 @@ migrations_dir = "drizzle"
 binding = "CACHE"
 id = "3093266e5c694331b39e4b9c0b1207e7"
 
-[[migrations]]
-tag = "v2"
-deleted_classes = ["ProjectionRebuilder"]
-
 [triggers]
 crons = ["*/15 * * * *"]
 
