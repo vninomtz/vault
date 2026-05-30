@@ -60,7 +60,6 @@ export const files = sqliteTable(
     accountId: text("account_id", { length: 26 })
       .notNull()
       .references(() => accounts.id),
-    slug: text("slug").notNull(),
     name: text("name").notNull(),
     type: text("type", {
       enum: ["note", "rule", "skill", "policy", "context", "agent"],
@@ -76,7 +75,7 @@ export const files = sqliteTable(
     updatedAt: integer("updated_at").notNull(),
   },
   (t) => [
-    uniqueIndex("idx_files_account_slug").on(t.accountId, t.slug),
+    uniqueIndex("idx_files_account_name").on(t.accountId, t.name),
     index("idx_files_account").on(t.accountId),
     index("idx_files_type").on(t.type),
     index("idx_files_status").on(t.status),

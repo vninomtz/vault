@@ -15,6 +15,13 @@
       "when": 1780111594772,
       "tag": "0001_motionless_nebula",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "6",
+      "when": 1780113744564,
+      "tag": "0002_short_starjammers",
+      "breakpoints": true
     }
   ]
 }

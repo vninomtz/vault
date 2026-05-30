@@ -1,6 +1,7 @@
-import { eq } from "drizzle-orm";
+import { eq, and } from "drizzle-orm";
 import { createDb } from "../db/index";
-import { sources, authors } from "../db/schema";
+import { sources, authors, files } from "../db/schema";
+import { ulid } from "../utils";
 import { appendEntry } from "../domain/append-log";
 import type { Env, EntryType, Intent } from "../types";
 
@@ -75,9 +76,19 @@ async function syncSource(env: Env, source: SourceRow): Promise<void> {
   const authorId = authorRow?.id ?? "01SYSTEM000000000000000001";
 
   for (const change of changes) {
+    // Find or create the file for this source
+    let file = await db.select({ id: files.id }).from(files)
+      .where(and(eq(files.accountId, SYSTEM_ACCOUNT_ID), eq(files.name, change.slug))).get();
+    if (!file) {
+      const fileId = ulid();
+      const now = Date.now();
+      await db.insert(files).values({ id: fileId, accountId: SYSTEM_ACCOUNT_ID, name: change.slug, type: change.type, currentVersion: 0, status: "active", createdAt: now, updatedAt: now }).run();
+      file = { id: fileId };
+    }
+
     await appendEntry(env, {
       accountId: SYSTEM_ACCOUNT_ID,
-      fileSlug: change.slug,
+      fileId: file.id,
       content: change.content,
       contentRef: null,
       type: change.type,

@@ -7,7 +7,7 @@ import { files } from "./db/schema";
 import { appendEntry } from "./domain/append-log";
 import { readProjection } from "./domain/projection-engine";
 import { ulid } from "./utils";
-import type { Env, EntryType } from "./types";
+import type { Env } from "./types";
 
 const SYSTEM_SOURCE_ID = "01SYSTEM000000000000000000";
 const SYSTEM_AUTHOR_ID = "01SYSTEM000000000000000001";
@@ -16,116 +16,119 @@ function createServer(env: Env, accountId: string): McpServer {
   const server = new McpServer({ name: "vault", version: "1.0.0" });
   const db = createDb(env.DB);
 
+  // Read by ID
   server.tool(
     "read_file",
-    "Lee el contenido vigente de un archivo de conocimiento en Vault",
-    { slug: z.string().describe("Identificador del archivo (kebab-case)") },
-    async ({ slug }) => {
-      const projection = await readProjection(env, accountId, slug);
-      if (!projection) return { content: [{ type: "text", text: `File '${slug}' no encontrado` }] };
-      return { content: [{ type: "text", text: projection.content }] };
+    "Lee el contenido de un archivo por su ID",
+    { id: z.string().describe("ID del archivo (ULID)") },
+    async ({ id }) => {
+      const file = await db.select().from(files).where(and(eq(files.id, id), eq(files.accountId, accountId))).get();
+      if (!file) return { content: [{ type: "text", text: `File '${id}' no encontrado` }] };
+      const projection = await readProjection(env, accountId, file.name);
+      return { content: [{ type: "text", text: projection?.content ?? "" }] };
     },
   );
 
+  // Find by name
   server.tool(
-    "write_file",
-    "Escribe o actualiza un archivo de conocimiento en Vault",
-    {
-      slug: z.string().describe("Identificador del archivo (kebab-case)"),
-      content: z.string().describe("Contenido en markdown"),
-      type: z.enum(["note", "rule", "skill", "policy", "context", "agent"]),
+    "find_file",
+    "Busca un archivo por su nombre o path (ej: projects/vault/spec)",
+    { name: z.string().describe("Nombre o path del archivo") },
+    async ({ name }) => {
+      const file = await db.select().from(files).where(and(eq(files.accountId, accountId), eq(files.name, name))).get();
+      if (!file) return { content: [{ type: "text", text: `File '${name}' no encontrado` }] };
+      const projection = await readProjection(env, accountId, file.name);
+      return { content: [{ type: "text", text: JSON.stringify({ id: file.id, name: file.name, content: projection?.content ?? "", version: file.currentVersion }) }] };
     },
-    async ({ slug, content, type }) => {
-      const existing = await db.select({ id: files.id }).from(files).where(and(eq(files.accountId, accountId), eq(files.slug, slug))).get();
+  );
+
+  // Create new file
+  server.tool(
+    "create_file",
+    "Crea un nuevo archivo de conocimiento en Vault",
+    {
+      name: z.string().describe("Nombre o path del archivo (ej: projects/vault/spec)"),
+      content: z.string().describe("Contenido en markdown"),
+    },
+    async ({ name, content }) => {
+      const existing = await db.select({ id: files.id }).from(files).where(and(eq(files.accountId, accountId), eq(files.name, name))).get();
+      if (existing) return { content: [{ type: "text", text: `Error: '${name}' ya existe (id: ${existing.id})` }] };
+
+      const fileId = ulid();
+      const now = Date.now();
+      await db.insert(files).values({ id: fileId, accountId, name, type: "note", currentVersion: 0, status: "active", createdAt: now, updatedAt: now }).run();
       const result = await appendEntry(env, {
         accountId,
-        fileSlug: slug,
+        fileId,
         content,
         contentRef: null,
-        type: type as EntryType,
-        intent: existing ? "addition" : "genesis",
+        type: "note",
+        intent: "genesis",
         authorId: SYSTEM_AUTHOR_ID,
         sourceId: SYSTEM_SOURCE_ID,
         confidence: "medium",
         references: [],
         idempotencyKey: ulid(),
       });
-      return { content: [{ type: "text", text: `Guardado como '${slug}' (v${result.sequenceNumber})` }] };
+      return { content: [{ type: "text", text: `Creado '${name}' (id: ${fileId}, v${result.sequenceNumber})` }] };
     },
   );
 
+  // Update by ID
   server.tool(
-    "search_files",
-    "Busca archivos de conocimiento en Vault por tipo o texto",
+    "update_file",
+    "Actualiza el contenido de un archivo por su ID",
     {
-      type: z.enum(["note", "rule", "skill", "policy", "context", "agent"]).optional(),
+      id: z.string().describe("ID del archivo (ULID)"),
+      content: z.string().describe("Nuevo contenido en markdown"),
+    },
+    async ({ id, content }) => {
+      const file = await db.select().from(files).where(and(eq(files.id, id), eq(files.accountId, accountId))).get();
+      if (!file) return { content: [{ type: "text", text: `File '${id}' no encontrado` }] };
+      const result = await appendEntry(env, {
+        accountId,
+        fileId: file.id,
+        content,
+        contentRef: null,
+        type: file.type,
+        intent: "addition",
+        authorId: SYSTEM_AUTHOR_ID,
+        sourceId: SYSTEM_SOURCE_ID,
+        confidence: "medium",
+        references: [],
+        idempotencyKey: ulid(),
+      });
+      return { content: [{ type: "text", text: `Actualizado '${file.name}' (v${result.sequenceNumber})` }] };
+    },
+  );
+
+  // List files
+  server.tool(
+    "list_files",
+    "Lista archivos de Vault, opcionalmente filtrados por prefix de path",
+    {
+      prefix: z.string().optional().describe("Prefix de path, ej: projects/vault/"),
       q: z.string().optional().describe("Búsqueda full-text"),
       limit: z.number().optional(),
     },
-    async ({ type, q, limit = 20 }) => {
-      let query = db.select().from(files).where(eq(files.accountId, accountId)).orderBy(desc(files.updatedAt)).limit(limit).$dynamic();
-      if (type) query = query.where(and(eq(files.accountId, accountId), eq(files.type, type as EntryType)));
-      const rows = await query.all();
+    async ({ prefix, q, limit = 20 }) => {
+      const rows = await db.select().from(files).where(eq(files.accountId, accountId)).orderBy(desc(files.updatedAt)).limit(100).all();
+      const filtered = rows.filter(f => !prefix || f.name.startsWith(prefix)).slice(0, limit);
+      if (!filtered.length) return { content: [{ type: "text", text: "No se encontraron archivos." }] };
 
       const results = await Promise.all(
-        rows.map(async (file) => {
-          const projection = await readProjection(env, accountId, file.slug);
-          const content = projection?.content ?? "";
-          if (q && !content.toLowerCase().includes(q.toLowerCase())) return null;
-          return { slug: file.slug, type: file.type, content, version: file.currentVersion };
+        filtered.map(async (file) => {
+          if (q) {
+            const projection = await readProjection(env, accountId, file.name);
+            const content = projection?.content ?? "";
+            if (!content.toLowerCase().includes(q.toLowerCase())) return null;
+          }
+          return `- ${file.id}  ${file.name} (v${file.currentVersion})`;
         }),
       );
 
-      const filtered = results.filter(Boolean) as Array<{ slug: string; type: string; content: string; version: number }>;
-      if (!filtered.length) return { content: [{ type: "text", text: "No se encontraron archivos." }] };
-      const text = filtered.map(f => `## ${f.slug} (${f.type}, v${f.version})\n${f.content}`).join("\n\n---\n\n");
-      return { content: [{ type: "text", text }] };
-    },
-  );
-
-  server.tool(
-    "list_files",
-    "Lista todos los archivos de Vault",
-    { type: z.enum(["note", "rule", "skill", "policy", "context", "agent"]).optional() },
-    async ({ type }) => {
-      let query = db.select().from(files).where(eq(files.accountId, accountId)).orderBy(desc(files.updatedAt)).$dynamic();
-      if (type) query = query.where(and(eq(files.accountId, accountId), eq(files.type, type as EntryType)));
-      const rows = await query.all();
-      if (!rows.length) return { content: [{ type: "text", text: "Vault vacío." }] };
-      return { content: [{ type: "text", text: rows.map(f => `- ${f.slug} (${f.type}, v${f.currentVersion})`).join("\n") }] };
-    },
-  );
-
-  server.tool(
-    "batch_write",
-    "Escribe múltiples archivos en Vault en una sola operación",
-    {
-      operations: z.array(z.object({
-        slug: z.string(),
-        content: z.string(),
-        type: z.enum(["note", "rule", "skill", "policy", "context", "agent"]),
-      })),
-    },
-    async ({ operations }) => {
-      const lines: string[] = [];
-      for (const op of operations) {
-        const existing = await db.select({ id: files.id }).from(files).where(and(eq(files.accountId, accountId), eq(files.slug, op.slug))).get();
-        const result = await appendEntry(env, {
-          accountId,
-          fileSlug: op.slug,
-          content: op.content,
-          contentRef: null,
-          type: op.type as EntryType,
-          intent: existing ? "addition" : "genesis",
-          authorId: SYSTEM_AUTHOR_ID,
-          sourceId: SYSTEM_SOURCE_ID,
-          confidence: "medium",
-          references: [],
-          idempotencyKey: ulid(),
-        });
-        lines.push(`✓ ${op.slug} (v${result.sequenceNumber})`);
-      }
-      return { content: [{ type: "text", text: lines.join("\n") }] };
+      const lines = results.filter(Boolean).join("\n");
+      return { content: [{ type: "text", text: lines || "No se encontraron archivos." }] };
     },
   );
 

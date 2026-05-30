@@ -1,4 +1,4 @@
-import { eq, max, and } from "drizzle-orm";
+import { eq, max } from "drizzle-orm";
 import { createDb } from "../db/index";
 import { entries, files, entryReferences, snapshots } from "../db/schema";
 import { ulid } from "../utils";
@@ -7,10 +7,7 @@ import { ConflictError } from "../types";
 import type { Env, AppendEntryParams, EntryResult } from "../types";
 
 async function nextGlobalPosition(db: ReturnType<typeof createDb>): Promise<number> {
-  const row = await db
-    .select({ max: max(entries.globalPosition) })
-    .from(entries)
-    .get();
+  const row = await db.select({ max: max(entries.globalPosition) }).from(entries).get();
   return (row?.max ?? 0) + 1;
 }
 
@@ -32,12 +29,7 @@ async function maybeSnapshot(
 
   const state: Record<string, unknown> = {};
   for (const e of allEntries) {
-    state[e.id] = {
-      content: e.content,
-      confidence: e.confidence,
-      author: e.authorId,
-      hlc: e.hlc,
-    };
+    state[e.id] = { content: e.content, confidence: e.confidence, author: e.authorId, hlc: e.hlc };
   }
 
   await db
@@ -58,47 +50,15 @@ export async function appendEntry(env: Env, params: AppendEntryParams): Promise<
 
   // 1. Deduplication
   const existing = await db
-    .select({
-      id: entries.id,
-      sequenceNumber: entries.sequenceNumber,
-      globalPosition: entries.globalPosition,
-      hlc: entries.hlc,
-    })
+    .select({ id: entries.id, sequenceNumber: entries.sequenceNumber, globalPosition: entries.globalPosition, hlc: entries.hlc })
     .from(entries)
     .where(eq(entries.idempotencyKey, params.idempotencyKey))
     .get();
+  if (existing) return { ...existing, idempotent: true };
 
-  if (existing) {
-    return { ...existing, idempotent: true };
-  }
-
-  // 2. Get or create File (scoped to account)
-  let file = await db
-    .select()
-    .from(files)
-    .where(and(eq(files.accountId, params.accountId), eq(files.slug, params.fileSlug)))
-    .get();
-
-  if (!file) {
-    const fileId = ulid();
-    const now = Date.now();
-    await db
-      .insert(files)
-      .values({
-        id: fileId,
-        accountId: params.accountId,
-        slug: params.fileSlug,
-        name: params.fileSlug,
-        type: params.type,
-        currentVersion: 0,
-        status: "active",
-        createdAt: now,
-        updatedAt: now,
-      })
-      .run();
-    file = await db.select().from(files).where(eq(files.id, fileId)).get();
-    if (!file) throw new Error("Failed to create file");
-  }
+  // 2. Get file (caller must ensure it exists)
+  const file = await db.select().from(files).where(eq(files.id, params.fileId)).get();
+  if (!file) throw new Error(`File ${params.fileId} not found`);
 
   // 3. Optimistic concurrency
   if (params.expectedVersion !== undefined && file.currentVersion !== params.expectedVersion) {
@@ -112,7 +72,7 @@ export async function appendEntry(env: Env, params: AppendEntryParams): Promise<
   const hlc = generateHLC();
   const now = Date.now();
 
-  // 5. Insert Entry + update File version
+  // 5. Insert entry + update file version
   await db.batch([
     db.insert(entries).values({
       id: entryId,
@@ -133,29 +93,19 @@ export async function appendEntry(env: Env, params: AppendEntryParams): Promise<
       confidence: params.confidence,
       createdAt: now,
     }),
-    db
-      .update(files)
-      .set({ currentVersion: sequenceNumber, updatedAt: now })
-      .where(eq(files.id, file.id)),
+    db.update(files).set({ currentVersion: sequenceNumber, updatedAt: now }).where(eq(files.id, file.id)),
   ]);
 
-  // 6. Insert references
+  // 6. References
   for (const refId of params.references) {
-    await db
-      .insert(entryReferences)
-      .values({ fromEntryId: entryId, toEntryId: refId })
-      .onConflictDoNothing()
-      .run();
+    await db.insert(entryReferences).values({ fromEntryId: entryId, toEntryId: refId }).onConflictDoNothing().run();
   }
 
   // 7. Invalidate KV cache
-  await Promise.all([
-    env.CACHE.delete(`projection:${params.fileSlug}`),
-    env.CACHE.delete(`projection_id:${file.id}`),
-  ]);
+  await env.CACHE.delete(`projection:${params.accountId}:${file.name}`);
+  await env.CACHE.delete(`projection_id:${file.id}`);
 
-
-  // 9. Maybe snapshot
+  // 8. Maybe snapshot
   await maybeSnapshot(db, file.id, sequenceNumber, file.snapshotPolicy);
 
   return { id: entryId, sequenceNumber, globalPosition, hlc };

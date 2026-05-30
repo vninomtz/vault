@@ -143,7 +143,7 @@ export async function readProjection(
   const file = await db
     .select({ id: files.id, status: files.status })
     .from(files)
-    .where(and(eq(files.accountId, accountId), eq(files.slug, fileSlug)))
+    .where(and(eq(files.accountId, accountId), eq(files.name, fileSlug)))
     .get();
   if (!file) return null;
 

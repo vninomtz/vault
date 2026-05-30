@@ -8,7 +8,7 @@ import { appendEntry } from "./domain/append-log";
 import { readProjection } from "./domain/projection-engine";
 import { ulid, sha256 } from "./utils";
 import { ConflictError } from "./types";
-import type { Env, ActorContext, EntryType, Confidence, Intent } from "./types";
+import type { Env, ActorContext, Confidence } from "./types";
 
 type Variables = { actor: ActorContext };
 type HonoEnv = { Bindings: Env; Variables: Variables };
@@ -87,49 +87,102 @@ app.use("*", async (c, next) => {
 
 // ─── Files ───────────────────────────────────────────────────────────────────
 
-app.put("/files/:slug", async (c) => {
-  const slug = c.req.param("slug");
+// POST /files — create a new file, server assigns ID
+app.post("/files", async (c) => {
   const actor = c.get("actor");
-  if (!checkScope(actor.write ?? [], slug)) {
-    return c.json({ error: { code: "forbidden", message: "No write access" } }, 403);
-  }
+  const body = await c.req.json<{
+    name: string;
+    content?: string;
+    content_ref?: string;
+    idempotency_key?: string;
+    meta?: { confidence?: string };
+  }>();
 
+  if (!body.name) return c.json({ error: { code: "invalid", message: '"name" is required' } }, 422);
+  if (!body.content && !body.content_ref)
+    return c.json({ error: { code: "invalid", message: '"content" or "content_ref" is required' } }, 422);
+
+  const db = createDb(c.env.DB);
+
+  // Validate name uniqueness within account
+  const existing = await db
+    .select({ id: files.id })
+    .from(files)
+    .where(and(eq(files.accountId, actor.accountId!), eq(files.name, body.name)))
+    .get();
+  if (existing)
+    return c.json({ error: { code: "conflict", message: `File '${body.name}' already exists`, details: { id: existing.id } } }, 409);
+
+  const fileId = ulid();
+  const now = Date.now();
+  await db.insert(files).values({
+    id: fileId,
+    accountId: actor.accountId!,
+    name: body.name,
+    type: "note",
+    currentVersion: 0,
+    status: "active",
+    createdAt: now,
+    updatedAt: now,
+  }).run();
+
+  const result = await appendEntry(c.env, {
+    accountId: actor.accountId!,
+    fileId,
+    content: body.content ?? null,
+    contentRef: body.content_ref ?? null,
+    type: "note",
+    intent: "genesis",
+    authorId: actor.id ?? SYSTEM_AUTHOR_ID,
+    sourceId: SYSTEM_SOURCE_ID,
+    confidence: (body.meta?.confidence ?? "medium") as Confidence,
+    references: [],
+    idempotencyKey: body.idempotency_key ?? ulid(),
+  });
+
+  return c.json({
+    file: {
+      id: fileId,
+      name: body.name,
+      content: body.content,
+      version: result.sequenceNumber,
+      created_at: new Date(now).toISOString(),
+      updated_at: new Date(now).toISOString(),
+    },
+  }, 201);
+});
+
+// PUT /files/:id — update content by ID
+app.put("/files/:id", async (c) => {
+  const id = c.req.param("id");
+  const actor = c.get("actor");
   const body = await c.req.json<{
     content?: string;
     content_ref?: string;
-    type?: string;
     if_version?: number;
     idempotency_key?: string;
     meta?: { confidence?: string; supersedes?: string[]; references?: string[] };
   }>();
 
-  if (!body.type) return c.json({ error: { code: "invalid", message: '"type" is required' } }, 422);
   if (!body.content && !body.content_ref)
-    return c.json(
-      { error: { code: "invalid", message: '"content" or "content_ref" is required' } },
-      422,
-    );
-
-  const validTypes = ["note", "rule", "skill", "policy", "context", "agent"];
-  if (!validTypes.includes(body.type))
-    return c.json({ error: { code: "invalid", message: `Invalid type: ${body.type}` } }, 422);
+    return c.json({ error: { code: "invalid", message: '"content" or "content_ref" is required' } }, 422);
 
   const db = createDb(c.env.DB);
-  const existingFile = await db
-    .select({ id: files.id })
+  const file = await db
+    .select()
     .from(files)
-    .where(and(eq(files.accountId, actor.accountId!), eq(files.slug, slug)))
+    .where(and(eq(files.id, id), eq(files.accountId, actor.accountId!)))
     .get();
-  const intent: Intent = existingFile ? "addition" : "genesis";
+  if (!file) return c.json({ error: { code: "not_found", message: `File '${id}' not found` } }, 404);
 
   try {
     const result = await appendEntry(c.env, {
       accountId: actor.accountId!,
-      fileSlug: slug,
+      fileId: file.id,
       content: body.content ?? null,
       contentRef: body.content_ref ?? null,
-      type: body.type as EntryType,
-      intent,
+      type: file.type,
+      intent: "addition",
       authorId: actor.id ?? SYSTEM_AUTHOR_ID,
       sourceId: SYSTEM_SOURCE_ID,
       confidence: (body.meta?.confidence ?? "medium") as Confidence,
@@ -138,65 +191,75 @@ app.put("/files/:slug", async (c) => {
       expectedVersion: body.if_version,
     });
 
-    const file = await db.select().from(files).where(and(eq(files.accountId, actor.accountId!), eq(files.slug, slug))).get();
-    const projection = await readProjection(c.env, actor.accountId!, slug);
-    const status = existingFile ? 200 : 201;
-
-    return c.json(
-      {
-        file: {
-          slug,
-          type: file?.type,
-          content: projection?.content ?? body.content,
-          version: result.sequenceNumber,
-          updated_at: new Date(file?.updatedAt ?? Date.now()).toISOString(),
-          created_at: new Date(file?.createdAt ?? Date.now()).toISOString(),
-        },
+    const projection = await readProjection(c.env, actor.accountId!, file.name);
+    return c.json({
+      file: {
+        id: file.id,
+        name: file.name,
+        content: projection?.content ?? body.content,
+        version: result.sequenceNumber,
+        updated_at: new Date().toISOString(),
       },
-      status as 200 | 201,
-    );
+    });
   } catch (e) {
-    if (e instanceof ConflictError) {
-      return c.json(
-        {
-          error: {
-            code: "conflict",
-            message: e.message,
-            details: { expected: e.expected, actual: e.actual },
-          },
-        },
-        409,
-      );
-    }
+    if (e instanceof ConflictError)
+      return c.json({ error: { code: "conflict", message: e.message, details: { expected: e.expected, actual: e.actual } } }, 409);
     throw e;
   }
 });
 
-app.get("/files/:slug", async (c) => {
-  const slug = c.req.param("slug");
+// PATCH /files/:id — rename / move
+app.patch("/files/:id", async (c) => {
+  const id = c.req.param("id");
   const actor = c.get("actor");
-  if (!checkScope(actor.read ?? [], slug)) {
-    return c.json({ error: { code: "forbidden", message: "No read access" } }, 403);
-  }
+  const body = await c.req.json<{ name: string }>();
+
+  if (!body.name) return c.json({ error: { code: "invalid", message: '"name" is required' } }, 422);
 
   const db = createDb(c.env.DB);
-  const file = await db.select().from(files).where(and(eq(files.accountId, actor.accountId!), eq(files.slug, slug))).get();
-  if (!file)
-    return c.json({ error: { code: "not_found", message: `File '${slug}' does not exist` } }, 404);
+  const file = await db
+    .select({ id: files.id })
+    .from(files)
+    .where(and(eq(files.id, id), eq(files.accountId, actor.accountId!)))
+    .get();
+  if (!file) return c.json({ error: { code: "not_found", message: `File '${id}' not found` } }, 404);
 
-  const projection = await readProjection(c.env, actor.accountId!, slug);
-  if (!projection)
-    return c.json({ error: { code: "not_found", message: `File '${slug}' does not exist` } }, 404);
+  // Validate new name doesn't conflict
+  const conflict = await db
+    .select({ id: files.id })
+    .from(files)
+    .where(and(eq(files.accountId, actor.accountId!), eq(files.name, body.name)))
+    .get();
+  if (conflict)
+    return c.json({ error: { code: "conflict", message: `File '${body.name}' already exists` } }, 409);
+
+  await db.update(files).set({ name: body.name, updatedAt: Date.now() }).where(eq(files.id, id)).run();
+  return c.json({ updated: true, name: body.name });
+});
+
+// GET /files/:id — read by ID
+app.get("/files/:id", async (c) => {
+  const id = c.req.param("id");
+  const actor = c.get("actor");
+
+  const db = createDb(c.env.DB);
+  const file = await db
+    .select()
+    .from(files)
+    .where(and(eq(files.id, id), eq(files.accountId, actor.accountId!)))
+    .get();
+  if (!file) return c.json({ error: { code: "not_found", message: `File '${id}' not found` } }, 404);
+
+  const projection = await readProjection(c.env, actor.accountId!, file.name);
+  if (!projection) return c.json({ error: { code: "not_found", message: `File '${id}' not found` } }, 404);
 
   const accept = c.req.header("Accept") ?? "application/json";
-  if (accept.includes("text/markdown")) {
-    return c.text(projection.content);
-  }
+  if (accept.includes("text/markdown")) return c.text(projection.content);
 
   return c.json({
     file: {
-      slug: file.slug,
-      type: file.type,
+      id: file.id,
+      name: file.name,
       content: projection.content,
       version: file.currentVersion,
       updated_at: new Date(file.updatedAt).toISOString(),
@@ -207,46 +270,66 @@ app.get("/files/:slug", async (c) => {
   });
 });
 
+// GET /files — list/search
+// ?id=      lookup by ID (redirects to canonical response)
+// ?name=    exact name lookup
+// ?prefix=  list files under a virtual path
+// ?q=       full-text search
 app.get("/files", async (c) => {
   const actor = c.get("actor");
-  const type = c.req.query("type");
+  const db = createDb(c.env.DB);
+
+  const idParam = c.req.query("id");
+  const nameParam = c.req.query("name");
+  const prefix = c.req.query("prefix");
   const q = c.req.query("q");
-  const hasConflictsParam = c.req.query("has_conflicts") === "true";
   const limit = Math.min(parseInt(c.req.query("limit") ?? "20", 10), 100);
   const cursor = c.req.query("cursor");
 
-  const db = createDb(c.env.DB);
+  // Lookup by ID
+  if (idParam) {
+    const file = await db.select().from(files).where(and(eq(files.id, idParam), eq(files.accountId, actor.accountId!))).get();
+    if (!file) return c.json({ error: { code: "not_found", message: `File '${idParam}' not found` } }, 404);
+    const projection = await readProjection(c.env, actor.accountId!, file.name);
+    return c.json({ file: { id: file.id, name: file.name, content: projection?.content ?? "", version: file.currentVersion, updated_at: new Date(file.updatedAt).toISOString() } });
+  }
 
+  // Lookup by exact name
+  if (nameParam) {
+    const file = await db.select().from(files).where(and(eq(files.accountId, actor.accountId!), eq(files.name, nameParam))).get();
+    if (!file) return c.json({ error: { code: "not_found", message: `File '${nameParam}' not found` } }, 404);
+    const projection = await readProjection(c.env, actor.accountId!, file.name);
+    return c.json({ file: { id: file.id, name: file.name, content: projection?.content ?? "", version: file.currentVersion, updated_at: new Date(file.updatedAt).toISOString() } });
+  }
+
+  // List with optional prefix / full-text
   let query = db
     .select()
     .from(files)
+    .where(eq(files.accountId, actor.accountId!))
     .orderBy(desc(files.updatedAt))
     .limit(limit + 1)
     .$dynamic();
 
-  if (type) query = query.where(eq(files.type, type as EntryType));
-  if (cursor) query = query.where(lt(files.updatedAt, new Date(cursor).getTime()));
+  if (prefix) query = query.where(and(eq(files.accountId, actor.accountId!)));
+  if (cursor) query = query.where(and(eq(files.accountId, actor.accountId!), lt(files.updatedAt, new Date(cursor).getTime())));
 
   const rows = await query.all();
+
+  const filtered = rows
+    .filter(f => !prefix || f.name.startsWith(prefix))
+    .slice(0, limit);
+
   const hasMore = rows.length > limit;
-  const page = rows.slice(0, limit);
 
   const results = await Promise.all(
-    page.map(async (file) => {
-      if (hasConflictsParam) {
-        const conflict = await db
-          .select({ id: conflicts.id })
-          .from(conflicts)
-          .where(eq(conflicts.fileId, file.id))
-          .get();
-        if (!conflict) return null;
-      }
-      const projection = await readProjection(c.env, actor.accountId!, file.slug);
+    filtered.map(async (file) => {
+      const projection = await readProjection(c.env, actor.accountId!, file.name);
       const content = projection?.content ?? "";
       if (q && !content.toLowerCase().includes(q.toLowerCase())) return null;
       return {
-        slug: file.slug,
-        type: file.type,
+        id: file.id,
+        name: file.name,
         content,
         version: file.currentVersion,
         updated_at: new Date(file.updatedAt).toISOString(),
@@ -255,10 +338,10 @@ app.get("/files", async (c) => {
     }),
   );
 
-  const filtered = results.filter(Boolean);
-  const nextCursor = hasMore ? new Date(page[page.length - 1]?.updatedAt ?? 0).toISOString() : null;
+  const out = results.filter(Boolean);
+  const nextCursor = hasMore ? new Date(filtered[filtered.length - 1]?.updatedAt ?? 0).toISOString() : null;
 
-  return c.json({ files: filtered, next_cursor: nextCursor, total: filtered.length });
+  return c.json({ files: out, next_cursor: nextCursor, total: out.length });
 });
 
 // ─── Batch ────────────────────────────────────────────────────────────────────
@@ -268,11 +351,8 @@ app.post("/batch", async (c) => {
   const body = await c.req.json<{
     atomic?: boolean;
     operations: Array<{
-      method: "PUT";
-      slug: string;
-      content?: string;
-      content_ref?: string;
-      type: string;
+      id: string;
+      content: string;
       if_version?: number;
       idempotency_key?: string;
     }>;
@@ -284,34 +364,29 @@ app.post("/batch", async (c) => {
     return c.json({ error: { code: "invalid", message: "Maximum 50 operations per batch" } }, 422);
 
   const db = createDb(c.env.DB);
-  const results: Array<{ slug: string; status: string; version?: number; error?: unknown }> = [];
+  const results: Array<{ id: string; status: string; version?: number; error?: unknown }> = [];
 
   for (const op of body.operations) {
-    if (!checkScope(actor.write ?? [], op.slug)) {
-      if (body.atomic)
-        return c.json(
-          { error: { code: "forbidden", message: `No write access to '${op.slug}'` } },
-          403,
-        );
-      results.push({ slug: op.slug, status: "forbidden" });
+    const file = await db
+      .select()
+      .from(files)
+      .where(and(eq(files.id, op.id), eq(files.accountId, actor.accountId!)))
+      .get();
+
+    if (!file) {
+      if (body.atomic) return c.json({ error: { code: "not_found", message: `File '${op.id}' not found` } }, 404);
+      results.push({ id: op.id, status: "not_found" });
       continue;
     }
-
-    const existingFile = await db
-      .select({ id: files.id })
-      .from(files)
-      .where(and(eq(files.accountId, actor.accountId!), eq(files.slug, op.slug)))
-      .get();
-    const intent: Intent = existingFile ? "addition" : "genesis";
 
     try {
       const result = await appendEntry(c.env, {
         accountId: actor.accountId!,
-        fileSlug: op.slug,
-        content: op.content ?? null,
-        contentRef: op.content_ref ?? null,
-        type: op.type as EntryType,
-        intent,
+        fileId: file.id,
+        content: op.content,
+        contentRef: null,
+        type: file.type,
+        intent: "addition",
         authorId: actor.id ?? SYSTEM_AUTHOR_ID,
         sourceId: SYSTEM_SOURCE_ID,
         confidence: "medium",
@@ -319,19 +394,14 @@ app.post("/batch", async (c) => {
         idempotencyKey: op.idempotency_key ?? ulid(),
         expectedVersion: op.if_version,
       });
-      results.push({ slug: op.slug, status: "ok", version: result.sequenceNumber });
+      results.push({ id: op.id, status: "ok", version: result.sequenceNumber });
     } catch (e) {
       if (e instanceof ConflictError) {
-        if (body.atomic)
-          return c.json({ error: { code: "conflict", message: `Conflict on '${op.slug}'` } }, 409);
-        results.push({
-          slug: op.slug,
-          status: "conflict",
-          error: { code: "conflict", details: { expected: e.expected, actual: e.actual } },
-        });
+        if (body.atomic) return c.json({ error: { code: "conflict", message: `Conflict on '${op.id}'` } }, 409);
+        results.push({ id: op.id, status: "conflict", error: { code: "conflict", details: { expected: e.expected, actual: e.actual } } });
       } else {
         if (body.atomic) throw e;
-        results.push({ slug: op.slug, status: "error" });
+        results.push({ id: op.id, status: "error" });
       }
     }
   }
@@ -570,7 +640,7 @@ app.get("/files/:slug/history", async (c) => {
   const actor = c.get("actor");
   const slug = c.req.param("slug");
   const db = createDb(c.env.DB);
-  const file = await db.select({ id: files.id }).from(files).where(and(eq(files.accountId, actor.accountId!), eq(files.slug, slug))).get();
+  const file = await db.select({ id: files.id }).from(files).where(and(eq(files.accountId, actor.accountId!), eq(files.id, slug))).get();
   if (!file)
     return c.json({ error: { code: "not_found", message: `File '${slug}' does not exist` } }, 404);
   const allEntries = await db
@@ -595,7 +665,7 @@ app.get("/files/:slug/conflicts", async (c) => {
   const actor = c.get("actor");
   const slug = c.req.param("slug");
   const db = createDb(c.env.DB);
-  const file = await db.select({ id: files.id }).from(files).where(and(eq(files.accountId, actor.accountId!), eq(files.slug, slug))).get();
+  const file = await db.select({ id: files.id }).from(files).where(and(eq(files.accountId, actor.accountId!), eq(files.id, slug))).get();
   if (!file)
     return c.json({ error: { code: "not_found", message: `File '${slug}' does not exist` } }, 404);
   const allConflicts = await db.select().from(conflicts).where(eq(conflicts.fileId, file.id)).all();
@@ -607,7 +677,7 @@ app.post("/files/:slug/conflicts/:conflictId/resolve", async (c) => {
   const slug = c.req.param("slug");
   const conflictId = c.req.param("conflictId");
   const db = createDb(c.env.DB);
-  const file = await db.select({ id: files.id }).from(files).where(and(eq(files.accountId, actor.accountId!), eq(files.slug, slug))).get();
+  const file = await db.select({ id: files.id }).from(files).where(and(eq(files.accountId, actor.accountId!), eq(files.id, slug))).get();
   if (!file)
     return c.json({ error: { code: "not_found", message: `File '${slug}' does not exist` } }, 404);
 
@@ -625,7 +695,7 @@ app.post("/files/:slug/conflicts/:conflictId/resolve", async (c) => {
 
   const result = await appendEntry(c.env, {
     accountId: actor.accountId!,
-    fileSlug: slug,
+    fileId: slug,
     content: body.content,
     contentRef: null,
     type: "note",
@@ -650,28 +720,6 @@ app.post("/files/:slug/conflicts/:conflictId/resolve", async (c) => {
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
-function checkScope(scopes: string[], slug: string): boolean {
-  for (const scope of scopes) {
-    const [scopeType, scopeSlug] = scope.split(":");
-    const slugMatch = scopeSlug === "*" || matchGlob(scopeSlug ?? "*", slug);
-    if (slugMatch) return true;
-    void scopeType;
-  }
-  return scopes.length === 0;
-}
-
-function matchGlob(pattern: string, value: string): boolean {
-  if (!pattern.includes("*")) return pattern === value;
-  const regex = new RegExp(
-    "^" +
-      pattern
-        .split("*")
-        .map((s) => s.replace(/[.+?^${}()|[\]\\]/g, "\\$&"))
-        .join(".*") +
-      "$",
-  );
-  return regex.test(value);
-}
 
 function isScopeSubset(parent: string[], child: string[]): boolean {
   return child.every((childScope) => {

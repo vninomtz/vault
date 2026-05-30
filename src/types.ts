@@ -41,7 +41,7 @@ export class ConflictError extends Error {
 
 export interface AppendEntryParams {
   accountId: string;
-  fileSlug: string;
+  fileId: string;
   content: string | null;
   contentRef: string | null;
   type: EntryType;
