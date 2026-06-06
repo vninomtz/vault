@@ -32,7 +32,8 @@
     "@modelcontextprotocol/sdk": "^1.29.0",
     "drizzle-orm": "^0.45.2",
     "hono": "^4.12.23",
-    "jose": "^6.2.3"
+    "jose": "^6.2.3",
+    "ulidx": "^2.4.1"
   },
   "devDependencies": {
     "@cloudflare/workers-types": "^4.20260529.1",
