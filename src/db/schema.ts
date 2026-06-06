@@ -67,7 +67,7 @@ export const files = sqliteTable(
     currentVersion: integer("current_version").notNull().default(0),
     snapshotPolicy: text("snapshot_policy").notNull().default('{"type":"n_events","value":500}'),
     status: text("status", {
-      enum: ["active", "archived", "conflicted", "stale"],
+      enum: ["active", "archived", "stale"],
     })
       .notNull()
       .default("active"),
@@ -192,74 +192,3 @@ export const upcasters = sqliteTable("upcasters", {
   transformFn: text("transform_fn").notNull(),
   createdAt: integer("created_at").notNull(),
 });
-
-export const conflicts = sqliteTable(
-  "conflicts",
-  {
-    id: text("id", { length: 26 }).primaryKey(),
-    fileId: text("file_id", { length: 26 })
-      .notNull()
-      .references(() => files.id),
-    status: text("status", { enum: ["open", "resolved"] })
-      .notNull()
-      .default("open"),
-    detectedAt: integer("detected_at").notNull(),
-    resolvedAt: integer("resolved_at"),
-    resolutionEntryId: text("resolution_entry_id", { length: 26 }).references(() => entries.id),
-  },
-  (t) => [index("idx_conflicts_file_id").on(t.fileId), index("idx_conflicts_status").on(t.status)],
-);
-
-export const conflictEntries = sqliteTable(
-  "conflict_entries",
-  {
-    conflictId: text("conflict_id", { length: 26 })
-      .notNull()
-      .references(() => conflicts.id),
-    entryId: text("entry_id", { length: 26 })
-      .notNull()
-      .references(() => entries.id),
-  },
-  (t) => [primaryKey({ columns: [t.conflictId, t.entryId] })],
-);
-
-export const tokens = sqliteTable(
-  "tokens",
-  {
-    id: text("id", { length: 26 }).primaryKey(),
-    tokenHash: text("token_hash").notNull().unique(),
-    name: text("name").notNull(),
-    accountId: text("account_id", { length: 26 })
-      .notNull()
-      .references(() => accounts.id),
-    actorId: text("actor_id", { length: 26 })
-      .notNull()
-      .references(() => authors.id),
-    parentId: text("parent_id", { length: 26 }),
-    readScope: text("read_scope").notNull().default("[]"),
-    writeScope: text("write_scope").notNull().default("[]"),
-    proposeOnly: integer("propose_only").notNull().default(0),
-    expiresAt: integer("expires_at"),
-    createdAt: integer("created_at").notNull(),
-  },
-  (t) => [
-    index("idx_tokens_actor_id").on(t.actorId),
-    index("idx_tokens_account_id").on(t.accountId),
-  ],
-);
-
-export const subscriptions = sqliteTable(
-  "subscriptions",
-  {
-    id: text("id", { length: 26 }).primaryKey(),
-    actorId: text("actor_id", { length: 26 })
-      .notNull()
-      .references(() => authors.id),
-    filter: text("filter").notNull().default("{}"),
-    channel: text("channel", { enum: ["webhook", "mcp", "polling"] }).notNull(),
-    channelConfig: text("channel_config").notNull().default("{}"),
-    lastNotifiedAt: integer("last_notified_at"),
-    createdAt: integer("created_at").notNull(),
-  },
-  (t) => [index("idx_subscriptions_actor_id").on(t.actorId)],
-);

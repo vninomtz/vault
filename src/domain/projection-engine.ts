@@ -6,7 +6,6 @@ import {
   projections,
   snapshots,
   entryReferences,
-  conflicts,
 } from "../db/schema";
 import { ulid } from "../utils";
 import { upcast } from "./upcaster";
@@ -130,12 +129,12 @@ export async function materializeProjection(env: Env, fileId: string): Promise<s
 export async function readProjection(
   env: Env,
   accountId: string,
-  fileSlug: string,
-): Promise<{ content: string; freshness: string; hasConflicts: boolean } | null> {
-  // 1. KV cache by account+slug
-  const cacheKey = `projection:${accountId}:${fileSlug}`;
+  fileName: string,
+): Promise<{ content: string; freshness: string } | null> {
+  // 1. KV cache by account+name
+  const cacheKey = `projection:${accountId}:${fileName}`;
   const cached = await env.CACHE.get<{ content: string; freshness: string }>(cacheKey, "json");
-  if (cached) return { ...cached, hasConflicts: false };
+  if (cached) return cached;
 
   const db = createDb(env.DB);
 
@@ -143,7 +142,7 @@ export async function readProjection(
   const file = await db
     .select({ id: files.id, status: files.status })
     .from(files)
-    .where(and(eq(files.accountId, accountId), eq(files.name, fileSlug)))
+    .where(and(eq(files.accountId, accountId), eq(files.name, fileName)))
     .get();
   if (!file) return null;
 
@@ -154,12 +153,7 @@ export async function readProjection(
   );
   if (cachedById) {
     await env.CACHE.put(cacheKey, JSON.stringify(cachedById), { expirationTtl: 3600 });
-    const openConflict = await db
-      .select({ id: conflicts.id })
-      .from(conflicts)
-      .where(eq(conflicts.fileId, file.id))
-      .get();
-    return { ...cachedById, hasConflicts: !!openConflict };
+    return cachedById;
   }
 
   // 4. Materialize from log
@@ -167,10 +161,5 @@ export async function readProjection(
   await env.CACHE.put(cacheKey, JSON.stringify({ content, freshness: "fresh" }), {
     expirationTtl: 3600,
   });
-  const openConflict = await db
-    .select({ id: conflicts.id })
-    .from(conflicts)
-    .where(eq(conflicts.fileId, file.id))
-    .get();
-  return { content, freshness: "fresh", hasConflicts: !!openConflict };
+  return { content, freshness: "fresh" };
 }

@@ -1,14 +1,6 @@
 export type EntryType = "note" | "rule" | "skill" | "policy" | "context" | "agent";
 export type Intent = "genesis" | "addition" | "correction" | "supersedes" | "retraction";
 export type Confidence = "high" | "medium" | "low";
-export type SourceType =
-  | "local_folder"
-  | "github"
-  | "confluence"
-  | "notion"
-  | "r2"
-  | "s3"
-  | "generic_git";
 
 export interface Env {
   DB: D1Database;
@@ -17,7 +9,6 @@ export interface Env {
   TEAM_DOMAIN: string;
   POLICY_AUD: string;
   ENCRYPTION_KEY: string;
-  VAULT_VERSION: string;
   ENVIRONMENT: string;
 }
 
@@ -26,8 +17,6 @@ export interface ActorContext {
   accountId?: string;
   kind: "human" | "agent" | "system";
   email?: string;
-  read?: string[];
-  write?: string[];
   isSystem?: boolean;
 }
 

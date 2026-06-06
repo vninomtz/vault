@@ -1,5 +1,5 @@
 const BASE = "/api";
-const HEADERS = { "Content-Type": "application/json", "Vault-Version": "2026-05-26" };
+const HEADERS = { "Content-Type": "application/json" };
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const res = await fetch(BASE + path, { headers: HEADERS, ...init });
@@ -20,7 +20,6 @@ export interface FileItem {
 export interface FileDetail extends FileItem {
   content: string;
   freshness: string;
-  has_conflicts: boolean;
   created_at: string;
 }
 

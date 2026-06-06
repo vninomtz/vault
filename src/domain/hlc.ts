@@ -15,13 +15,3 @@ export function generateHLC(): number {
 
   return lastHLC;
 }
-
-export function receiveHLC(remoteHLC: number): number {
-  const localPhysical = Date.now() * 65536;
-  lastHLC = Math.max(localPhysical, remoteHLC, lastHLC) + 1;
-  return lastHLC;
-}
-
-export function hlcToMs(hlc: number): number {
-  return Math.floor(hlc / 65536);
-}
