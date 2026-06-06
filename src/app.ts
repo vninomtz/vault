@@ -1,7 +1,14 @@
 import { Hono } from "hono";
 import { cors } from "hono/cors";
 import { handleMcp } from "./mcp";
-import { validateAccessJWT } from "./auth";
+import { validateAccessJWT, validateBearerOIDC } from "./auth";
+import {
+  handleAuthorize,
+  handleCallback,
+  handleToken,
+  handleRegister,
+  oauthAuthorizationServerMetadata,
+} from "./oauth";
 import { eq, desc, asc, lt, and } from "drizzle-orm";
 import { createDb } from "./db/index";
 import { files, entries, tokens, sources, subscriptions, conflicts, authors, accounts } from "./db/schema";
@@ -40,8 +47,13 @@ app.use(
 // ─── Auth ─────────────────────────────────────────────────────────────────────
 
 app.use("*", async (c, next) => {
-  // Skip auth for CORS preflight and public discovery endpoints.
-  if (c.req.method === "OPTIONS" || c.req.path.startsWith("/.well-known/")) {
+  // Skip auth for CORS preflight, public discovery endpoints, and the OAuth
+  // broker routes (which run their own flow before any actor exists).
+  if (
+    c.req.method === "OPTIONS" ||
+    c.req.path.startsWith("/.well-known/") ||
+    c.req.path.startsWith("/oauth/")
+  ) {
     return next();
   }
 
@@ -64,6 +76,19 @@ app.use("*", async (c, next) => {
       write: JSON.parse(row.writeScope) as string[],
     });
     return next();
+  }
+
+  // MCP clients (Claude) authenticate with the OIDC id_token obtained from the
+  // OAuth broker flow, sent as Authorization: Bearer <jwt>.
+  if (auth.startsWith("Bearer ") && !auth.startsWith("Bearer vlt_")) {
+    const identity = await validateBearerOIDC(auth.slice(7), c.env);
+    if (identity) {
+      const db = createDb(c.env.DB);
+      const actor = await resolveHumanActor(db, identity.email);
+      c.set("actor", actor);
+      console.log("User authenticated (bearer):", identity.email);
+      return next();
+    }
   }
 
   // Humans authenticate via Cloudflare Access (JWT in header or cookie).
@@ -102,7 +127,7 @@ app.use("*", async (c, next) => {
 
 app.use("*", async (c, next) => {
   const actor = c.get("actor");
-  if (!actor) return next(); // public paths (/.well-known/, OPTIONS) have no actor
+  if (!actor) return next(); // public paths (/.well-known/, /oauth/, OPTIONS) have no actor
   const actorId = actor.id ?? actor.email ?? "anonymous";
   const minute = Math.floor(Date.now() / 60000);
   const key = `rl:${actorId}:${minute}`;
@@ -115,16 +140,29 @@ app.use("*", async (c, next) => {
   return next();
 });
 
-// ─── OAuth discovery ──────────────────────────────────────────────────────────
+// ─── OAuth discovery & broker ──────────────────────────────────────────────────
 
-// Public endpoint — no auth required (Cloudflare Access Bypass policy covers this path).
-// Claude calls this to discover the authorization server before initiating login.
+// Public — RFC 9728 protected resource metadata. Points Claude at this Worker
+// as the authorization server so it discovers the broker endpoints below.
 app.get("/.well-known/oauth-protected-resource", (c) => {
   return c.json({
     resource: WORKER_URL,
-    authorization_servers: [c.env.TEAM_DOMAIN],
+    authorization_servers: [WORKER_URL],
+    scopes_supported: ["openid", "email", "profile"],
+    bearer_methods_supported: ["header"],
   });
 });
+
+// Public — RFC 8414 authorization server metadata.
+app.get("/.well-known/oauth-authorization-server", (c) => {
+  return c.json(oauthAuthorizationServerMetadata(c.env));
+});
+
+// Public — OAuth broker routes. Auth middleware skips /oauth/* above.
+app.get("/oauth/authorize", (c) => handleAuthorize(c.req.raw, c.env));
+app.get("/oauth/callback", (c) => handleCallback(c.req.raw, c.env));
+app.post("/oauth/token", (c) => handleToken(c.req.raw, c.env));
+app.post("/oauth/register", (c) => handleRegister(c.req.raw));
 
 // ─── Files ───────────────────────────────────────────────────────────────────
 

@@ -61,3 +61,32 @@ export async function validateAccessJWT(
     return null;
   }
 }
+
+/**
+ * Validates an OIDC id_token issued by the Access SaaS app during the OAuth
+ * flow. Unlike `validateAccessJWT` (which checks the POLICY_AUD of the
+ * self-hosted Access application), the OIDC id_token carries `aud =
+ * CF_CLIENT_ID`. Used for `Authorization: Bearer <id_token>` on /api/mcp.
+ */
+export async function validateBearerOIDC(
+  token: string,
+  env: Env,
+): Promise<AccessIdentity | null> {
+  if (!token) return null;
+  if (!env.TEAM_DOMAIN || !env.CF_CLIENT_ID) return null;
+
+  try {
+    const jwks = getJWKS(env.TEAM_DOMAIN);
+    const { payload } = await jwtVerify(token, jwks, {
+      issuer: env.TEAM_DOMAIN,
+      audience: env.CF_CLIENT_ID,
+    });
+
+    const email = typeof payload["email"] === "string" ? payload["email"] : null;
+    if (!email) return null;
+
+    return { email, sub: payload.sub ?? "" };
+  } catch {
+    return null;
+  }
+}
