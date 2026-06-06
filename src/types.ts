@@ -20,6 +20,9 @@ export interface ActorContext {
   isSystem?: boolean;
 }
 
+export type HonoVariables = { actor: ActorContext };
+export type HonoEnv = { Bindings: Env; Variables: HonoVariables };
+
 export class ConflictError extends Error {
   constructor(
     public expected: number,

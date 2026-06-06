@@ -1,128 +1,132 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { WebStandardStreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js";
 import { z } from "zod";
-import { eq, desc, and } from "drizzle-orm";
-import { createDb } from "./db/index";
-import { files } from "./db/schema";
-import { appendEntry, replaceContent } from "./domain/append-log";
-import { readProjection } from "./domain/projection-engine";
-import { ulid } from "./utils";
+import { SYSTEM_AUTHOR_ID } from "./constants";
+import {
+  createFile,
+  readFileById,
+  readFileByName,
+  updateFile,
+  renameFile,
+  listFiles,
+  FileExistsError,
+  FileNotFoundError,
+  ConflictError,
+} from "./services/files";
 import type { Env } from "./types";
-
-const SYSTEM_SOURCE_ID = "01SYSTEM000000000000000000";
-const SYSTEM_AUTHOR_ID = "01SYSTEM000000000000000001";
 
 function createServer(env: Env, accountId: string): McpServer {
   const server = new McpServer({ name: "vault", version: "1.0.0" });
-  const db = createDb(env.DB);
 
-  // Read by ID
   server.tool(
     "read_file",
-    "Lee el contenido de un archivo por su ID",
+    "Lee el contenido de un archivo por su ID. Devuelve nombre, versión y contenido.",
     { id: z.string().describe("ID del archivo (ULID)") },
     async ({ id }) => {
-      const file = await db.select().from(files).where(and(eq(files.id, id), eq(files.accountId, accountId))).get();
-      if (!file) return { content: [{ type: "text", text: `File '${id}' no encontrado` }] };
-      const projection = await readProjection(env, accountId, file.name);
-      return { content: [{ type: "text", text: projection?.content ?? "" }] };
+      const file = await readFileById(env, accountId, id);
+      if (!file) return { content: [{ type: "text", text: `Error: archivo '${id}' no encontrado` }] };
+      return {
+        content: [{
+          type: "text",
+          text: `name: ${file.name}\nversion: ${file.version}\nupdated_at: ${new Date(file.updatedAt).toISOString()}\n\n${file.content}`,
+        }],
+      };
     },
   );
 
-  // Find by name
   server.tool(
     "find_file",
-    "Busca un archivo por su nombre o path (ej: projects/vault/spec)",
+    "Busca un archivo por nombre o path (ej: projects/vault/spec). Devuelve el ID necesario para editar.",
     { name: z.string().describe("Nombre o path del archivo") },
     async ({ name }) => {
-      const file = await db.select().from(files).where(and(eq(files.accountId, accountId), eq(files.name, name))).get();
-      if (!file) return { content: [{ type: "text", text: `File '${name}' no encontrado` }] };
-      const projection = await readProjection(env, accountId, file.name);
-      return { content: [{ type: "text", text: JSON.stringify({ id: file.id, name: file.name, content: projection?.content ?? "", version: file.currentVersion }) }] };
+      const file = await readFileByName(env, accountId, name);
+      if (!file) return { content: [{ type: "text", text: `Error: archivo '${name}' no encontrado` }] };
+      return {
+        content: [{
+          type: "text",
+          text: `id: ${file.id}\nname: ${file.name}\nversion: ${file.version}\nupdated_at: ${new Date(file.updatedAt).toISOString()}\n\n${file.content}`,
+        }],
+      };
     },
   );
 
-  // Create new file
   server.tool(
     "create_file",
-    "Crea un nuevo archivo de conocimiento en Vault",
+    "Crea un nuevo archivo de conocimiento en Vault.",
     {
       name: z.string().describe("Nombre o path del archivo (ej: projects/vault/spec)"),
       content: z.string().describe("Contenido en markdown"),
     },
     async ({ name, content }) => {
-      const existing = await db.select({ id: files.id }).from(files).where(and(eq(files.accountId, accountId), eq(files.name, name))).get();
-      if (existing) return { content: [{ type: "text", text: `Error: '${name}' ya existe (id: ${existing.id})` }] };
-
-      const fileId = ulid();
-      const now = Date.now();
-      await db.insert(files).values({ id: fileId, accountId, name, type: "note", currentVersion: 0, status: "active", createdAt: now, updatedAt: now }).run();
-      const result = await appendEntry(env, {
-        accountId,
-        fileId,
-        content,
-        contentRef: null,
-        type: "note",
-        intent: "genesis",
-        authorId: SYSTEM_AUTHOR_ID,
-        sourceId: SYSTEM_SOURCE_ID,
-        confidence: "medium",
-        references: [],
-        idempotencyKey: ulid(),
-      });
-      return { content: [{ type: "text", text: `Creado '${name}' (id: ${fileId}, v${result.sequenceNumber})` }] };
+      try {
+        const file = await createFile(env, accountId, SYSTEM_AUTHOR_ID, { name, content });
+        return { content: [{ type: "text", text: `Creado: id=${file.id} name=${file.name} v${file.version}` }] };
+      } catch (e) {
+        if (e instanceof FileExistsError)
+          return { content: [{ type: "text", text: `Error: '${name}' ya existe (id: ${e.existingId})` }] };
+        throw e;
+      }
     },
   );
 
-  // Update by ID
   server.tool(
     "update_file",
-    "Actualiza el contenido de un archivo por su ID",
+    "Reemplaza el contenido de un archivo por su ID. Usa if_version para concurrencia optimista.",
     {
       id: z.string().describe("ID del archivo (ULID)"),
       content: z.string().describe("Nuevo contenido en markdown"),
+      if_version: z.number().optional().describe("Versión esperada (opcional). Rechaza la escritura si el archivo ya fue modificado."),
     },
-    async ({ id, content }) => {
-      const file = await db.select().from(files).where(and(eq(files.id, id), eq(files.accountId, accountId))).get();
-      if (!file) return { content: [{ type: "text", text: `File '${id}' no encontrado` }] };
-      const result = await replaceContent(env, {
-        accountId,
-        fileId: file.id,
-        content,
-        authorId: SYSTEM_AUTHOR_ID,
-        sourceId: SYSTEM_SOURCE_ID,
-      });
-      return { content: [{ type: "text", text: `Actualizado '${file.name}' (v${result.sequenceNumber})` }] };
+    async ({ id, content, if_version }) => {
+      try {
+        const file = await updateFile(env, accountId, SYSTEM_AUTHOR_ID, { fileId: id, content, expectedVersion: if_version });
+        return { content: [{ type: "text", text: `Actualizado: name=${file.name} v${file.version}` }] };
+      } catch (e) {
+        if (e instanceof FileNotFoundError)
+          return { content: [{ type: "text", text: `Error: archivo '${id}' no encontrado` }] };
+        if (e instanceof ConflictError)
+          return { content: [{ type: "text", text: `Error de concurrencia: el archivo está en v${e.actual}, se esperaba v${e.expected}. Vuelve a leer y reintenta.` }] };
+        throw e;
+      }
     },
   );
 
-  // List files
+  server.tool(
+    "rename_file",
+    "Renombra o mueve un archivo a un nuevo path. El ID del archivo no cambia.",
+    {
+      id: z.string().describe("ID del archivo (ULID)"),
+      name: z.string().describe("Nuevo nombre o path (ej: archive/vault/spec)"),
+    },
+    async ({ id, name }) => {
+      try {
+        const result = await renameFile(env, accountId, { fileId: id, newName: name });
+        return { content: [{ type: "text", text: `Renombrado: id=${result.id} name=${result.name}` }] };
+      } catch (e) {
+        if (e instanceof FileNotFoundError)
+          return { content: [{ type: "text", text: `Error: archivo '${id}' no encontrado` }] };
+        if (e instanceof FileExistsError)
+          return { content: [{ type: "text", text: `Error: ya existe un archivo con el nombre '${name}'` }] };
+        throw e;
+      }
+    },
+  );
+
   server.tool(
     "list_files",
-    "Lista archivos de Vault, opcionalmente filtrados por prefix de path",
+    "Lista archivos de Vault. Soporta filtro por prefix de path y búsqueda full-text.",
     {
       prefix: z.string().optional().describe("Prefix de path, ej: projects/vault/"),
-      q: z.string().optional().describe("Búsqueda full-text"),
-      limit: z.number().optional(),
+      q: z.string().optional().describe("Búsqueda full-text en contenido"),
+      limit: z.number().optional().describe("Máximo de resultados (default 20, máx 100)"),
     },
     async ({ prefix, q, limit = 20 }) => {
-      const rows = await db.select().from(files).where(eq(files.accountId, accountId)).orderBy(desc(files.updatedAt)).limit(100).all();
-      const filtered = rows.filter(f => !prefix || f.name.startsWith(prefix)).slice(0, limit);
-      if (!filtered.length) return { content: [{ type: "text", text: "No se encontraron archivos." }] };
-
-      const results = await Promise.all(
-        filtered.map(async (file) => {
-          if (q) {
-            const projection = await readProjection(env, accountId, file.name);
-            const content = projection?.content ?? "";
-            if (!content.toLowerCase().includes(q.toLowerCase())) return null;
-          }
-          return `- ${file.id}  ${file.name} (v${file.currentVersion})`;
-        }),
-      );
-
-      const lines = results.filter(Boolean).join("\n");
-      return { content: [{ type: "text", text: lines || "No se encontraron archivos." }] };
+      const result = await listFiles(env, accountId, { prefix, q, limit });
+      if (!result.files.length) return { content: [{ type: "text", text: "No se encontraron archivos." }] };
+      const lines = result.files
+        .map((f) => `- ${f.id}  ${f.name}  v${f.version}  ${new Date(f.updatedAt).toISOString()}`)
+        .join("\n");
+      return { content: [{ type: "text", text: lines }] };
     },
   );
 
