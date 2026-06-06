@@ -18,6 +18,8 @@ const SYSTEM_SOURCE_ID = "01SYSTEM000000000000000000";
 const SYSTEM_AUTHOR_ID = "01SYSTEM000000000000000001";
 const SYSTEM_ACCOUNT_ID = "01SYSTEM000000000000000000";
 
+const WORKER_URL = "https://vault-api.ninomtz-victor.workers.dev";
+
 // ─── App ─────────────────────────────────────────────────────────────────────
 
 const app = new Hono<HonoEnv>();
@@ -79,6 +81,20 @@ app.use("*", async (c, next) => {
     return next();
   }
 
+  // /api/mcp needs a discoverable OAuth hint so Claude can initiate login.
+  if (c.req.path === "/api/mcp") {
+    return new Response(JSON.stringify({ error: "unauthorized" }), {
+      status: 401,
+      headers: {
+        "Content-Type": "application/json",
+        "WWW-Authenticate": [
+          'Bearer realm="vault"',
+          `resource_metadata_url="${WORKER_URL}/.well-known/oauth-protected-resource"`,
+        ].join(", "),
+      },
+    });
+  }
+
   return c.json({ error: { code: "unauthorized", message: "Authentication required" } }, 401);
 });
 
@@ -86,6 +102,7 @@ app.use("*", async (c, next) => {
 
 app.use("*", async (c, next) => {
   const actor = c.get("actor");
+  if (!actor) return next(); // public paths (/.well-known/, OPTIONS) have no actor
   const actorId = actor.id ?? actor.email ?? "anonymous";
   const minute = Math.floor(Date.now() / 60000);
   const key = `rl:${actorId}:${minute}`;
@@ -96,6 +113,17 @@ app.use("*", async (c, next) => {
     return c.json({ error: { code: "rate_limited", message: "Rate limit exceeded" } }, 429);
   await c.env.CACHE.put(key, String(current + 1), { expirationTtl: 120 });
   return next();
+});
+
+// ─── OAuth discovery ──────────────────────────────────────────────────────────
+
+// Public endpoint — no auth required (Cloudflare Access Bypass policy covers this path).
+// Claude calls this to discover the authorization server before initiating login.
+app.get("/.well-known/oauth-protected-resource", (c) => {
+  return c.json({
+    resource: WORKER_URL,
+    authorization_servers: [c.env.TEAM_DOMAIN],
+  });
 });
 
 // ─── Files ───────────────────────────────────────────────────────────────────
