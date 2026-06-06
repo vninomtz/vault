@@ -16,8 +16,6 @@ export interface Env {
   CACHE: KVNamespace;
   TEAM_DOMAIN: string;
   POLICY_AUD: string;
-  CF_CLIENT_ID: string;
-  CF_CLIENT_SECRET: string;
   ENCRYPTION_KEY: string;
   VAULT_VERSION: string;
   ENVIRONMENT: string;

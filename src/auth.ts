@@ -22,6 +22,8 @@ function getJWKS(teamDomain: string): ReturnType<typeof createRemoteJWKSet> {
 
 // Access injects the JWT in the Cf-Access-Jwt-Assertion header. For browser
 // navigations it also sets the CF_Authorization cookie — used as fallback.
+// With Managed OAuth, Access authenticates non-browser clients (Claude) at the
+// edge and forwards the same Cf-Access-Jwt-Assertion header to this origin.
 function extractToken(request: Request): string | null {
   const header = request.headers.get("Cf-Access-Jwt-Assertion");
   if (header) return header;
@@ -37,6 +39,10 @@ function extractToken(request: Request): string | null {
 /**
  * Validates a Cloudflare Access JWT. Returns the user identity or null if the
  * token is missing, malformed, or fails signature / issuer / audience checks.
+ *
+ * This is defense-in-depth: workers.dev origins are publicly reachable, so the
+ * Worker re-validates the Access JWT rather than trusting that every request
+ * passed through the Access edge.
  */
 export async function validateAccessJWT(
   request: Request,
@@ -51,35 +57,6 @@ export async function validateAccessJWT(
     const { payload } = await jwtVerify(token, jwks, {
       issuer: env.TEAM_DOMAIN,
       audience: env.POLICY_AUD,
-    });
-
-    const email = typeof payload["email"] === "string" ? payload["email"] : null;
-    if (!email) return null;
-
-    return { email, sub: payload.sub ?? "" };
-  } catch {
-    return null;
-  }
-}
-
-/**
- * Validates an OIDC id_token issued by the Access SaaS app during the OAuth
- * flow. Unlike `validateAccessJWT` (which checks the POLICY_AUD of the
- * self-hosted Access application), the OIDC id_token carries `aud =
- * CF_CLIENT_ID`. Used for `Authorization: Bearer <id_token>` on /api/mcp.
- */
-export async function validateBearerOIDC(
-  token: string,
-  env: Env,
-): Promise<AccessIdentity | null> {
-  if (!token) return null;
-  if (!env.TEAM_DOMAIN || !env.CF_CLIENT_ID) return null;
-
-  try {
-    const jwks = getJWKS(env.TEAM_DOMAIN);
-    const { payload } = await jwtVerify(token, jwks, {
-      issuer: env.TEAM_DOMAIN,
-      audience: env.CF_CLIENT_ID,
     });
 
     const email = typeof payload["email"] === "string" ? payload["email"] : null;

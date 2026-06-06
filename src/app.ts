@@ -1,14 +1,7 @@
 import { Hono } from "hono";
 import { cors } from "hono/cors";
 import { handleMcp } from "./mcp";
-import { validateAccessJWT, validateBearerOIDC } from "./auth";
-import {
-  handleAuthorize,
-  handleCallback,
-  handleToken,
-  handleRegister,
-  oauthAuthorizationServerMetadata,
-} from "./oauth";
+import { validateAccessJWT } from "./auth";
 import { eq, desc, asc, lt, and } from "drizzle-orm";
 import { createDb } from "./db/index";
 import { files, entries, tokens, sources, subscriptions, conflicts, authors, accounts } from "./db/schema";
@@ -24,8 +17,6 @@ type HonoEnv = { Bindings: Env; Variables: Variables };
 const SYSTEM_SOURCE_ID = "01SYSTEM000000000000000000";
 const SYSTEM_AUTHOR_ID = "01SYSTEM000000000000000001";
 const SYSTEM_ACCOUNT_ID = "01SYSTEM000000000000000000";
-
-const WORKER_URL = "https://vault-api.ninomtz-victor.workers.dev";
 
 // ─── App ─────────────────────────────────────────────────────────────────────
 
@@ -45,15 +36,18 @@ app.use(
 );
 
 // ─── Auth ─────────────────────────────────────────────────────────────────────
+//
+// Authentication strategy with Cloudflare Access Managed OAuth:
+//   - Access protects this Worker at the edge. For non-browser clients (Claude)
+//     it runs the full OAuth flow (401 + WWW-Authenticate, discovery, token)
+//     and forwards the request with a Cf-Access-Jwt-Assertion header.
+//   - The Worker re-validates that JWT here as defense-in-depth, since the
+//     workers.dev origin is publicly reachable.
+//   - Agents/pipelines may alternatively use a long-lived vlt_ bearer token.
 
 app.use("*", async (c, next) => {
-  // Skip auth for CORS preflight, public discovery endpoints, and the OAuth
-  // broker routes (which run their own flow before any actor exists).
-  if (
-    c.req.method === "OPTIONS" ||
-    c.req.path.startsWith("/.well-known/") ||
-    c.req.path.startsWith("/oauth/")
-  ) {
+  // Skip auth for CORS preflight.
+  if (c.req.method === "OPTIONS") {
     return next();
   }
 
@@ -78,25 +72,14 @@ app.use("*", async (c, next) => {
     return next();
   }
 
-  // MCP clients (Claude) authenticate with the OIDC id_token obtained from the
-  // OAuth broker flow, sent as Authorization: Bearer <jwt>.
-  if (auth.startsWith("Bearer ") && !auth.startsWith("Bearer vlt_")) {
-    const identity = await validateBearerOIDC(auth.slice(7), c.env);
-    if (identity) {
-      const db = createDb(c.env.DB);
-      const actor = await resolveHumanActor(db, identity.email);
-      c.set("actor", actor);
-      console.log("User authenticated (bearer):", identity.email);
-      return next();
-    }
-  }
-
-  // Humans authenticate via Cloudflare Access (JWT in header or cookie).
+  // Humans / MCP clients authenticate via Cloudflare Access. The JWT arrives in
+  // the Cf-Access-Jwt-Assertion header (or CF_Authorization cookie for browser).
   const identity = await validateAccessJWT(c.req.raw, c.env);
   if (identity) {
     const db = createDb(c.env.DB);
     const actor = await resolveHumanActor(db, identity.email);
     c.set("actor", actor);
+    console.log("User authenticated:", identity.email);
     return next();
   }
 
@@ -106,20 +89,9 @@ app.use("*", async (c, next) => {
     return next();
   }
 
-  // /api/mcp needs a discoverable OAuth hint so Claude can initiate login.
-  if (c.req.path === "/api/mcp") {
-    return new Response(JSON.stringify({ error: "unauthorized" }), {
-      status: 401,
-      headers: {
-        "Content-Type": "application/json",
-        "WWW-Authenticate": [
-          'Bearer realm="vault"',
-          `resource_metadata_url="${WORKER_URL}/.well-known/oauth-protected-resource"`,
-        ].join(", "),
-      },
-    });
-  }
-
+  // No valid credentials. Under Managed OAuth, Access normally issues the
+  // 401 + WWW-Authenticate at the edge before requests reach the Worker; this
+  // is the fallback for direct-to-origin requests.
   return c.json({ error: { code: "unauthorized", message: "Authentication required" } }, 401);
 });
 
@@ -127,7 +99,7 @@ app.use("*", async (c, next) => {
 
 app.use("*", async (c, next) => {
   const actor = c.get("actor");
-  if (!actor) return next(); // public paths (/.well-known/, /oauth/, OPTIONS) have no actor
+  if (!actor) return next(); // preflight and other actor-less requests
   const actorId = actor.id ?? actor.email ?? "anonymous";
   const minute = Math.floor(Date.now() / 60000);
   const key = `rl:${actorId}:${minute}`;
@@ -139,30 +111,6 @@ app.use("*", async (c, next) => {
   await c.env.CACHE.put(key, String(current + 1), { expirationTtl: 120 });
   return next();
 });
-
-// ─── OAuth discovery & broker ──────────────────────────────────────────────────
-
-// Public — RFC 9728 protected resource metadata. Points Claude at this Worker
-// as the authorization server so it discovers the broker endpoints below.
-app.get("/.well-known/oauth-protected-resource", (c) => {
-  return c.json({
-    resource: WORKER_URL,
-    authorization_servers: [WORKER_URL],
-    scopes_supported: ["openid", "email", "profile"],
-    bearer_methods_supported: ["header"],
-  });
-});
-
-// Public — RFC 8414 authorization server metadata.
-app.get("/.well-known/oauth-authorization-server", (c) => {
-  return c.json(oauthAuthorizationServerMetadata(c.env));
-});
-
-// Public — OAuth broker routes. Auth middleware skips /oauth/* above.
-app.get("/oauth/authorize", (c) => handleAuthorize(c.req.raw, c.env));
-app.get("/oauth/callback", (c) => handleCallback(c.req.raw, c.env));
-app.post("/oauth/token", (c) => handleToken(c.req.raw, c.env));
-app.post("/oauth/register", (c) => handleRegister(c.req.raw));
 
 // ─── Files ───────────────────────────────────────────────────────────────────
 
@@ -418,7 +366,7 @@ api.get("/files", async (c) => {
   });
 });
 
-// ─── Batch ────────────────────────────────────────────────────────────────────
+// ─── Batch ─────────────────────────────────────────────────────────────────────
 
 api.post("/batch", async (c) => {
   const actor = c.get("actor");
