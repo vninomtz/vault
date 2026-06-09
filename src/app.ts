@@ -7,6 +7,7 @@ import {
   handleCreateFile,
   handleUpdateFile,
   handleRenameFile,
+  handleDeleteFile,
   handleGetFile,
   handleListFiles,
   handleGetFileHistory,
@@ -29,6 +30,7 @@ app.use("*", rateLimitMiddleware);
 api.post("/files", handleCreateFile);
 api.put("/files/:id", handleUpdateFile);
 api.patch("/files/:id", handleRenameFile);
+api.delete("/files/:id", handleDeleteFile);
 api.get("/files/:id/history", handleGetFileHistory);
 api.get("/files/:id", handleGetFile);
 api.get("/files", handleListFiles);

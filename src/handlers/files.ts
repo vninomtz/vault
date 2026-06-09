@@ -6,6 +6,7 @@ import {
   readFileByName,
   updateFile,
   renameFile,
+  deleteFile,
   listFiles,
   getFileHistory,
   FileExistsError,
@@ -125,6 +126,18 @@ export async function handleListFiles(c: FC) {
     next_cursor: result.nextCursor,
     total: result.files.length,
   });
+}
+
+export async function handleDeleteFile(c: FC) {
+  const actor = c.get("actor");
+  try {
+    await deleteFile(c.env, actor.accountId!, c.req.param("id")!);
+    return c.body(null, 204);
+  } catch (e) {
+    if (e instanceof FileNotFoundError)
+      return c.json({ error: { code: "not_found", message: e.message } }, 404);
+    throw e;
+  }
 }
 
 export async function handleGetFileHistory(c: FC) {

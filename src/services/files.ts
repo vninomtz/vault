@@ -1,4 +1,4 @@
-import { eq, desc, asc, lt, and, like } from "drizzle-orm";
+import { eq, desc, asc, lt, and, like, ne } from "drizzle-orm";
 import { createDb } from "../db/index";
 import { files, entries } from "../db/schema";
 import { appendEntry, replaceContent } from "../domain/append-log";
@@ -92,7 +92,7 @@ export async function createFile(
 
 export async function readFileById(env: Env, accountId: string, id: string): Promise<FileResult | null> {
   const db = createDb(env.DB);
-  const file = await db.select().from(files).where(and(eq(files.id, id), eq(files.accountId, accountId))).get();
+  const file = await db.select().from(files).where(and(eq(files.id, id), eq(files.accountId, accountId), ne(files.status, "archived"))).get();
   if (!file) return null;
 
   const projection = await readProjection(env, accountId, file.name);
@@ -111,7 +111,7 @@ export async function readFileById(env: Env, accountId: string, id: string): Pro
 
 export async function readFileByName(env: Env, accountId: string, name: string): Promise<FileResult | null> {
   const db = createDb(env.DB);
-  const file = await db.select().from(files).where(and(eq(files.accountId, accountId), eq(files.name, name))).get();
+  const file = await db.select().from(files).where(and(eq(files.accountId, accountId), eq(files.name, name), ne(files.status, "archived"))).get();
   if (!file) return null;
 
   const projection = await readProjection(env, accountId, file.name);
@@ -186,6 +186,7 @@ export async function listFiles(
 
   const conditions = [
     eq(files.accountId, accountId),
+    ne(files.status, "archived"),
     ...(params.cursor ? [lt(files.updatedAt, new Date(params.cursor).getTime())] : []),
     ...(params.prefix ? [like(files.name, `${params.prefix}%`)] : []),
   ];
@@ -219,6 +220,13 @@ export async function listFiles(
     files: out.map((f) => ({ id: f.id, name: f.name, version: f.currentVersion, updatedAt: f.updatedAt })),
     nextCursor,
   };
+}
+
+export async function deleteFile(env: Env, accountId: string, fileId: string): Promise<void> {
+  const db = createDb(env.DB);
+  const file = await db.select({ id: files.id }).from(files).where(and(eq(files.id, fileId), eq(files.accountId, accountId), ne(files.status, "archived"))).get();
+  if (!file) throw new FileNotFoundError(fileId);
+  await db.update(files).set({ status: "archived", updatedAt: Date.now() }).where(eq(files.id, fileId)).run();
 }
 
 export async function getFileHistory(env: Env, accountId: string, fileId: string): Promise<HistoryEntry[]> {

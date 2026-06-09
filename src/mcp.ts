@@ -8,6 +8,7 @@ import {
   readFileByName,
   updateFile,
   renameFile,
+  deleteFile,
   listFiles,
   FileExistsError,
   FileNotFoundError,
@@ -107,6 +108,22 @@ function createServer(env: Env, accountId: string): McpServer {
           return { content: [{ type: "text", text: `Error: archivo '${id}' no encontrado` }] };
         if (e instanceof FileExistsError)
           return { content: [{ type: "text", text: `Error: ya existe un archivo con el nombre '${name}'` }] };
+        throw e;
+      }
+    },
+  );
+
+  server.tool(
+    "delete_file",
+    "Elimina un archivo de Vault (soft-delete). El archivo deja de ser visible y no se puede recuperar por API.",
+    { id: z.string().describe("ID del archivo (ULID)") },
+    async ({ id }) => {
+      try {
+        await deleteFile(env, accountId, id);
+        return { content: [{ type: "text", text: `Eliminado: id=${id}` }] };
+      } catch (e) {
+        if (e instanceof FileNotFoundError)
+          return { content: [{ type: "text", text: `Error: archivo '${id}' no encontrado` }] };
         throw e;
       }
     },

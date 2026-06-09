@@ -1,20 +1,23 @@
 import { useState, useRef, useEffect } from "react";
-import { useFile, useUpdateFile, useRenameFile } from "../hooks/useFiles";
+import { useFile, useUpdateFile, useRenameFile, useDeleteFile } from "../hooks/useFiles";
 import { renderMarkdown } from "../lib/markdown";
 
 interface Props {
   fileId: string;
+  onDelete?: () => void;
 }
 
-export function FileViewer({ fileId }: Props) {
+export function FileViewer({ fileId, onDelete }: Props) {
   const { data: file, isLoading } = useFile(fileId);
   const updateFile = useUpdateFile();
   const renameFile = useRenameFile();
+  const deleteFile = useDeleteFile();
 
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState("");
   const [renaming, setRenaming] = useState(false);
   const [newName, setNewName] = useState("");
+  const [confirmDelete, setConfirmDelete] = useState(false);
   const editorRef = useRef<HTMLTextAreaElement>(null);
 
   useEffect(() => {
@@ -47,6 +50,11 @@ export function FileViewer({ fileId }: Props) {
     if (!newName.trim() || newName === file!.name) { setRenaming(false); return; }
     await renameFile.mutateAsync({ id: file!.id, name: newName });
     setRenaming(false);
+  }
+
+  async function doDelete() {
+    await deleteFile.mutateAsync(file!.id);
+    onDelete?.();
   }
 
   return (
@@ -99,13 +107,38 @@ export function FileViewer({ fileId }: Props) {
                 Save
               </button>
             </>
+          ) : confirmDelete ? (
+            <>
+              <span className="text-xs text-[var(--color-text-muted)]">Delete?</span>
+              <button
+                onClick={() => setConfirmDelete(false)}
+                className="text-xs px-2.5 py-1 rounded border border-[var(--color-border)] text-[var(--color-text-muted)] hover:text-[var(--color-text)] transition-colors"
+              >
+                No
+              </button>
+              <button
+                onClick={doDelete}
+                disabled={deleteFile.isPending}
+                className="text-xs px-2.5 py-1 rounded bg-red-600 hover:bg-red-500 text-white transition-colors disabled:opacity-50"
+              >
+                Yes, delete
+              </button>
+            </>
           ) : (
-            <button
-              onClick={() => setEditing(true)}
-              className="text-xs px-2.5 py-1 rounded border border-[var(--color-border)] text-[var(--color-text-muted)] hover:text-[var(--color-text)] hover:border-[var(--color-border-hover)] transition-colors"
-            >
-              Edit
-            </button>
+            <>
+              <button
+                onClick={() => setEditing(true)}
+                className="text-xs px-2.5 py-1 rounded border border-[var(--color-border)] text-[var(--color-text-muted)] hover:text-[var(--color-text)] hover:border-[var(--color-border-hover)] transition-colors"
+              >
+                Edit
+              </button>
+              <button
+                onClick={() => setConfirmDelete(true)}
+                className="text-xs px-2.5 py-1 rounded border border-[var(--color-border)] text-[var(--color-text-muted)] hover:border-red-500 hover:text-red-400 transition-colors"
+              >
+                Delete
+              </button>
+            </>
           )}
         </div>
       </div>

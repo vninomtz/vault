@@ -50,3 +50,11 @@ export function useRenameFile() {
     onSuccess: () => qc.invalidateQueries({ queryKey: ["files"] }),
   });
 }
+
+export function useDeleteFile() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (id: string) => api.deleteFile(id),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["files", "list"] }),
+  });
+}

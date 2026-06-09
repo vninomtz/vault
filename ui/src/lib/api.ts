@@ -7,6 +7,7 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
     const body = await res.json().catch(() => ({})) as { error?: { message?: string } };
     throw new Error(body.error?.message ?? `HTTP ${res.status}`);
   }
+  if (res.status === 204) return undefined as T;
   return res.json() as Promise<T>;
 }
 
@@ -62,4 +63,7 @@ export const api = {
       method: "PATCH",
       body: JSON.stringify({ name }),
     }),
+
+  deleteFile: (id: string) =>
+    request<void>(`/files/${id}`, { method: "DELETE" }),
 };

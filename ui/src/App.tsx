@@ -28,7 +28,7 @@ export default function App() {
 
         <main className="flex-1 flex overflow-hidden">
           {selectedId ? (
-            <FileViewer key={selectedId} fileId={selectedId} />
+            <FileViewer key={selectedId} fileId={selectedId} onDelete={() => setSelectedId(null)} />
           ) : (
             <div className="flex-1 flex flex-col items-center justify-center gap-3 text-[var(--color-text-subtle)]">
               <svg
